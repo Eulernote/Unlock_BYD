@@ -1,35 +1,10 @@
 {
-  "_como_usar": "Cada app precisa de: name (nome exibido), package (nome do pacote), url (link DIRETO do arquivo .apk/.xapk/.apks). Hospede os arquivos como assets de uma Release do GitHub (tag 'apps') e aponte a url para o asset. Edite este arquivo e salve; o app lê a lista nova ao abrir, sem recompilar.",
+  "_como_usar": "Cada app: name, package, url (link direto do .apk/.xapk/.apks). Arquivos hospedados na branch 'assets' e servidos via raw.githubusercontent (repo publico). Edite e salve; o app le a lista nova ao abrir.",
   "apps": [
-    {
-      "name": "Aurora Store",
-      "package": "com.aurora.store",
-      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/AuroraStore.apk"
-    },
-    {
-      "name": "MicroG",
-      "package": "app.revanced.android.gms",
-      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/MicroG.apk"
-    },
-    {
-      "name": "Cx File Explorer",
-      "package": "com.cxinventor.file.explorer",
-      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/CxFileExplorer.apk"
-    },
-    {
-      "name": "Equalizer",
-      "package": "com.jazibkhan.equalizer",
-      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Equalizer.apk"
-    },
-    {
-      "name": "Radarbot",
-      "package": "com.vialsoft.radarbot_free",
-      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Radarbot.apk"
-    },
-    {
-      "name": "HMS Core",
-      "package": "com.huawei.hwid",
-      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Hms.apk"
-    }
+    { "name": "Aurora Store",     "package": "com.aurora.store",            "url": "https://raw.githubusercontent.com/Eulernote/euler-catalog/assets/apks/AuroraStore.apk" },
+    { "name": "MicroG",           "package": "app.revanced.android.gms",    "url": "https://raw.githubusercontent.com/Eulernote/euler-catalog/assets/apks/MicroG.apk" },
+    { "name": "Cx File Explorer", "package": "com.cxinventor.file.explorer","url": "https://raw.githubusercontent.com/Eulernote/euler-catalog/assets/apks/CxFileExplorer.apk" },
+    { "name": "Equalizer",        "package": "com.jazibkhan.equalizer",     "url": "https://raw.githubusercontent.com/Eulernote/euler-catalog/assets/apks/Equalizer.apk" },
+    { "name": "HMS Core",         "package": "com.huawei.hwid",             "url": "https://raw.githubusercontent.com/Eulernote/euler-catalog/assets/apks/Hms.apk" }
   ]
 }
