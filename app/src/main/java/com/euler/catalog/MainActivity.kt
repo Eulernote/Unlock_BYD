@@ -12,6 +12,7 @@ import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -21,25 +22,22 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.ZipFile
 
 /**
  * Catálogo online de apps curados.
- * Ao abrir, baixa a lista (catalog.json) da internet, mostra os apps e instala
- * com um clique: baixa o APK, instala em silêncio (Device Owner) e concede as
- * permissões. Requer que o app seja DEVICE OWNER e que o carro tenha internet.
+ * Ao abrir, baixa a lista (catalog.json), mostra os apps e instala com um clique:
+ * baixa o pacote, instala em silêncio (Device Owner) e concede as permissões.
+ * Aceita .apk (único) e .xapk/.apks (base + splits) — detecta pelo conteúdo.
+ * Requer que o app seja DEVICE OWNER e que o carro tenha internet.
  *
- * Edite CATALOG_URL para o seu arquivo de lista. Modelo de catalog.json:
- * {
- *   "apps": [
- *     { "name": "Waze", "package": "com.waze",
- *       "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/waze.apk" }
- *   ]
- * }
+ * Modelo de catalog.json:
+ * { "apps": [ { "name": "Waze", "package": "com.waze",
+ *               "url": "https://.../waze.xapk" } ] }
  */
 class MainActivity : Activity() {
 
     companion object {
-        // Troque pela sua lista. Raw do GitHub (branch main) serve bem para o JSON.
         const val CATALOG_URL = "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/catalog.json"
     }
 
@@ -69,14 +67,12 @@ class MainActivity : Activity() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
         }
-
         refresh()
     }
 
     private fun isInstalled(pkg: String): Boolean =
         try { packageManager.getPackageInfo(pkg, 0); true } catch (e: Exception) { false }
 
-    /** Busca a lista online em background e renderiza. */
     private fun refresh() {
         container.removeAllViews()
         container.addView(header())
@@ -93,9 +89,7 @@ class MainActivity : Activity() {
                         setPadding(0, 24, 0, 16)
                     })
                     container.addView(Button(this).apply { text = "Tentar de novo"; setOnClickListener { refresh() } })
-                } else {
-                    render(entries)
-                }
+                } else render(entries)
                 addOwnerMaintenance()
             }
         }.start()
@@ -143,40 +137,84 @@ class MainActivity : Activity() {
         })
     }
 
-    /** Baixa o APK da url em background e dispara a instalação. */
+    /** Baixa o pacote (apk/xapk/apks) e instala, em background. */
     private fun installFromWeb(e: AppEntry) {
         toast("Baixando ${e.name}…")
         Thread {
-            val dest = File(cacheDir, e.pkg + ".apk")
-            val ok = try { httpDownload(e.url, dest) } catch (ex: Exception) { false }
+            val dl = File(cacheDir, e.pkg + ".dl")
+            val ok = try { httpDownload(e.url, dl) } catch (ex: Exception) { false }
+            if (!ok || dl.length() == 0L) { runOnUiThread { toast("Falha ao baixar ${e.name}") }; return@Thread }
+
+            // Detecta formato pelo conteúdo: se o zip contém .apk internos é bundle (xapk/apks).
+            val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
             runOnUiThread {
-                if (ok && dest.length() > 0) install(dest)
-                else toast("Falha ao baixar ${e.name} (ver internet/URL)")
+                try {
+                    if (splits == null) installSession(listOf(dl))   // apk único
+                    else if (splits.isEmpty()) toast("Pacote de ${e.name} sem APK dentro")
+                    else installSession(splits)                      // base + splits
+                } catch (ex: Exception) { toast("Falha ao instalar ${e.name}: ${ex.message}") }
             }
         }.start()
     }
 
-    private fun install(apk: File) {
-        try {
-            val pi = packageManager.packageInstaller
-            val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-            val sessionId = pi.createSession(params)
-            val session = pi.openSession(sessionId)
-            apk.inputStream().use { input ->
-                session.openWrite(apk.name, 0, apk.length()).use { out ->
-                    input.copyTo(out); session.fsync(out)
-                }
+    /**
+     * Se o arquivo é um bundle (xapk/apks), extrai os .apk internos para o cache e
+     * retorna a lista; copia OBB se houver. Retorna null se for um APK único.
+     */
+    private fun extractSplits(file: File, pkg: String): List<File>? {
+        ZipFile(file).use { zf ->
+            val apkEntries = zf.entries().toList().filter {
+                !it.isDirectory && it.name.endsWith(".apk", true) && !it.name.contains("standalones/")
             }
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-                (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-            val pendingIntent = PendingIntent.getBroadcast(
-                this, sessionId, Intent(ACTION_INSTALL).setPackage(packageName), flags
-            )
-            session.commit(pendingIntent.intentSender)
-            session.close()
-        } catch (e: Exception) {
-            toast("Falha ao instalar: ${e.message}")
+            if (apkEntries.isEmpty()) return null  // APK único (não contém .apk internos)
+
+            val outDir = File(cacheDir, "sp_$pkg").apply { deleteRecursively(); mkdirs() }
+            var universal: File? = null
+            val splits = ArrayList<File>()
+            for (entry in apkEntries) {
+                val base = entry.name.substringAfterLast('/')
+                val out = File(outDir, base)
+                zf.getInputStream(entry).use { inp -> out.outputStream().use { inp.copyTo(it) } }
+                if (base.equals("universal.apk", true)) universal = out
+                splits.add(out)
+            }
+            // OBB (best-effort; pode ser bloqueado em Android novo)
+            zf.entries().toList().filter {
+                !it.isDirectory && (it.name.endsWith(".obb", true) || it.name.contains("Android/obb/"))
+            }.forEach { entry ->
+                try {
+                    val dir = File(Environment.getExternalStorageDirectory(), "Android/obb/$pkg").apply { mkdirs() }
+                    zf.getInputStream(entry).use { inp ->
+                        File(dir, entry.name.substringAfterLast('/')).outputStream().use { inp.copyTo(it) }
+                    }
+                } catch (e: Exception) { /* ignora falha de OBB */ }
+            }
+            // universal.apk basta sozinho; senão instala todos os splits juntos
+            return if (universal != null) listOf(universal!!) else splits
         }
+    }
+
+    /** Instala um ou vários APKs (splits) numa única sessão. */
+    private fun installSession(apks: List<File>) {
+        val pi = packageManager.packageInstaller
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        val sessionId = pi.createSession(params)
+        val session = pi.openSession(sessionId)
+        var i = 0
+        for (f in apks) {
+            session.openWrite("split_$i.apk", 0, f.length()).use { out ->
+                f.inputStream().use { it.copyTo(out) }
+                session.fsync(out)
+            }
+            i++
+        }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this, sessionId, Intent(ACTION_INSTALL).setPackage(packageName), flags
+        )
+        session.commit(pendingIntent.intentSender)
+        session.close()
     }
 
     private val statusReceiver = object : BroadcastReceiver() {
@@ -213,20 +251,17 @@ class MainActivity : Activity() {
 
     private fun httpGet(urlStr: String): String {
         val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 15000; readTimeout = 20000
+            instanceFollowRedirects = true; connectTimeout = 15000; readTimeout = 20000
         }
-        try {
-            return conn.inputStream.bufferedReader().use { it.readText() }
-        } finally { conn.disconnect() }
+        try { return conn.inputStream.bufferedReader().use { it.readText() } }
+        finally { conn.disconnect() }
     }
 
     private fun httpDownload(urlStr: String, dest: File): Boolean {
         var url = urlStr; var redirects = 0
-        while (redirects < 5) {
+        while (redirects < 6) {
             val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = 15000; readTimeout = 60000
+                instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000
             }
             val code = conn.responseCode
             if (code in 300..399) {
