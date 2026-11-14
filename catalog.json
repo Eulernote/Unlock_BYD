@@ -1,0 +1,4 @@
+{
+  "_como_usar": "Liste os apps em 'apps'. Cada item precisa de: name (nome exibido), package (nome do pacote, ex. com.waze), url (link DIRETO do .apk). Para APKs grandes, suba como asset de uma Release do GitHub e use a url de download do asset. Edite este arquivo e salve; o app lê a lista atualizada ao abrir.",
+  "apps": []
+}

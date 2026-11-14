@@ -17,25 +17,38 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
 /**
- * Catálogo de apps curados, com instalação silenciosa + concessão de permissões.
- * Requer que este app seja DEVICE OWNER (ver README).
+ * Catálogo online de apps curados.
+ * Ao abrir, baixa a lista (catalog.json) da internet, mostra os apps e instala
+ * com um clique: baixa o APK, instala em silêncio (Device Owner) e concede as
+ * permissões. Requer que o app seja DEVICE OWNER e que o carro tenha internet.
  *
- * Coloque os APKs (uma vez, via adb):
- *   adb push waze.apk "/sdcard/Android/data/com.euler.catalog/files/apks/"
- *
- * Comportamento: ao abrir, instala automaticamente qualquer APK da pasta cujo
- * pacote NÃO esteja instalado (ex.: cliente apagou o Waze → reinstala sozinho).
- * Os botões permitem reinstalar/forçar manualmente a qualquer momento.
+ * Edite CATALOG_URL para o seu arquivo de lista. Modelo de catalog.json:
+ * {
+ *   "apps": [
+ *     { "name": "Waze", "package": "com.waze",
+ *       "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/waze.apk" }
+ *   ]
+ * }
  */
 class MainActivity : Activity() {
+
+    companion object {
+        // Troque pela sua lista. Raw do GitHub (branch main) serve bem para o JSON.
+        const val CATALOG_URL = "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/catalog.json"
+    }
 
     private val ACTION_INSTALL = "com.euler.catalog.INSTALL_STATUS"
     private lateinit var dpm: DevicePolicyManager
     private lateinit var admin: ComponentName
     private lateinit var container: LinearLayout
+
+    private data class AppEntry(val name: String, val pkg: String, val url: String)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,88 +70,90 @@ class MainActivity : Activity() {
             registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
         }
 
-        buildList()
-        // Instalação automática do que estiver faltando (só se for Device Owner).
-        if (dpm.isDeviceOwnerApp(packageName)) installMissing(silentToast = false)
+        refresh()
     }
-
-    private fun apkDir(): File {
-        val d = File(getExternalFilesDir(null), "apks")
-        if (!d.exists()) d.mkdirs()
-        return d
-    }
-
-    private fun listApks(): List<File> =
-        apkDir().listFiles { f -> f.name.endsWith(".apk", true) }?.sortedBy { it.name } ?: emptyList()
-
-    /** Lê o nome do pacote de dentro do arquivo APK, sem instalar. */
-    private fun pkgOf(apk: File): String? =
-        try { packageManager.getPackageArchiveInfo(apk.absolutePath, 0)?.packageName } catch (e: Exception) { null }
 
     private fun isInstalled(pkg: String): Boolean =
         try { packageManager.getPackageInfo(pkg, 0); true } catch (e: Exception) { false }
 
-    private fun buildList() {
+    /** Busca a lista online em background e renderiza. */
+    private fun refresh() {
         container.removeAllViews()
-        val isOwner = dpm.isDeviceOwnerApp(packageName)
+        container.addView(header())
+        container.addView(TextView(this).apply { text = "Carregando catálogo…"; setPadding(0, 24, 0, 0) })
 
-        container.addView(TextView(this).apply {
-            text = if (isOwner) "Device Owner: OK (instalação silenciosa ativa)"
-                   else "ATENÇÃO: não é Device Owner — instalação vai pedir confirmação na tela e NÃO concede permissões sozinho. Rode o dpm set-device-owner (ver README)."
-            setPadding(0, 0, 0, 24)
-        })
+        Thread {
+            val entries = try { parseCatalog(httpGet(CATALOG_URL)) } catch (e: Exception) { null }
+            runOnUiThread {
+                container.removeAllViews()
+                container.addView(header())
+                if (entries == null) {
+                    container.addView(TextView(this).apply {
+                        text = "Não consegui baixar a lista.\nVerifique a internet do carro.\n\nURL: $CATALOG_URL"
+                        setPadding(0, 24, 0, 16)
+                    })
+                    container.addView(Button(this).apply { text = "Tentar de novo"; setOnClickListener { refresh() } })
+                } else {
+                    render(entries)
+                }
+                addOwnerMaintenance()
+            }
+        }.start()
+    }
 
-        val apks = listApks()
-        if (apks.isEmpty()) {
-            container.addView(TextView(this).apply {
-                text = "Nenhum APK encontrado em:\n${apkDir().absolutePath}\n\n" +
-                       "Envie via:\nadb push app.apk \"${apkDir().absolutePath}/\""
-            })
+    private fun header(): TextView = TextView(this).apply {
+        text = if (dpm.isDeviceOwnerApp(packageName)) "Device Owner: OK (instalação silenciosa ativa)"
+               else "ATENÇÃO: não é Device Owner — a instalação vai pedir confirmação e não concede permissões sozinha. Rode o dpm set-device-owner."
+        setPadding(0, 0, 0, 16)
+    }
+
+    private fun render(entries: List<AppEntry>) {
+        if (entries.isEmpty()) {
+            container.addView(TextView(this).apply { text = "Catálogo vazio. Adicione apps no catalog.json." })
             return
         }
-
         container.addView(Button(this).apply {
-            text = "Instalar / reparar TODOS os que faltam"
-            setOnClickListener { installMissing(silentToast = false) }
+            text = "Baixar e instalar TODOS os que faltam"
+            setOnClickListener { entries.filter { !isInstalled(it.pkg) }.forEach { installFromWeb(it) } }
         })
         container.addView(TextView(this).apply { text = ""; setPadding(0, 16, 0, 0) })
 
-        for (apk in apks) {
-            val pkg = pkgOf(apk)
-            val installed = pkg != null && isInstalled(pkg)
+        for (e in entries) {
+            val installed = isInstalled(e.pkg)
             container.addView(TextView(this).apply {
-                text = (pkg ?: apk.name) + if (installed) "  — instalado" else "  — ausente"
+                text = "${e.name}  (${e.pkg})  — " + if (installed) "instalado" else "disponível"
                 setPadding(0, 16, 0, 2)
             })
             container.addView(Button(this).apply {
-                text = (if (installed) "Reinstalar: " else "Instalar: ") + apk.name
-                setOnClickListener { install(apk) }
-            })
-        }
-
-        if (isOwner) {
-            container.addView(TextView(this).apply { text = ""; setPadding(0, 40, 0, 0) })
-            container.addView(Button(this).apply {
-                text = "(manutenção) Liberar Device Owner"
-                setOnClickListener {
-                    try {
-                        dpm.clearDeviceOwnerApp(packageName)
-                        toast("Device Owner removido")
-                        buildList()
-                    } catch (e: Exception) { toast("Falha: ${e.message}") }
-                }
+                text = if (installed) "Reinstalar ${e.name}" else "Instalar ${e.name}"
+                setOnClickListener { installFromWeb(e) }
             })
         }
     }
 
-    /** Instala automaticamente os APKs da pasta cujo pacote ainda não está instalado. */
-    private fun installMissing(silentToast: Boolean) {
-        val pending = listApks().filter { apk -> pkgOf(apk)?.let { !isInstalled(it) } ?: true }
-        if (pending.isEmpty()) {
-            if (!silentToast) toast("Tudo já instalado")
-            return
-        }
-        for (apk in pending) install(apk)
+    private fun addOwnerMaintenance() {
+        if (!dpm.isDeviceOwnerApp(packageName)) return
+        container.addView(TextView(this).apply { text = ""; setPadding(0, 40, 0, 0) })
+        container.addView(Button(this).apply {
+            text = "(manutenção) Liberar Device Owner"
+            setOnClickListener {
+                try { dpm.clearDeviceOwnerApp(packageName); toast("Device Owner removido"); refresh() }
+                catch (e: Exception) { toast("Falha: ${e.message}") }
+            }
+        })
+    }
+
+    /** Baixa o APK da url em background e dispara a instalação. */
+    private fun installFromWeb(e: AppEntry) {
+        toast("Baixando ${e.name}…")
+        Thread {
+            val dest = File(cacheDir, e.pkg + ".apk")
+            val ok = try { httpDownload(e.url, dest) } catch (ex: Exception) { false }
+            runOnUiThread {
+                if (ok && dest.length() > 0) install(dest)
+                else toast("Falha ao baixar ${e.name} (ver internet/URL)")
+            }
+        }.start()
     }
 
     private fun install(apk: File) {
@@ -149,8 +164,7 @@ class MainActivity : Activity() {
             val session = pi.openSession(sessionId)
             apk.inputStream().use { input ->
                 session.openWrite(apk.name, 0, apk.length()).use { out ->
-                    input.copyTo(out)
-                    session.fsync(out)
+                    input.copyTo(out); session.fsync(out)
                 }
             }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
@@ -160,9 +174,8 @@ class MainActivity : Activity() {
             )
             session.commit(pendingIntent.intentSender)
             session.close()
-            toast("Instalando ${apk.name}…")
         } catch (e: Exception) {
-            toast("Falha ao iniciar instalação: ${e.message}")
+            toast("Falha ao instalar: ${e.message}")
         }
     }
 
@@ -175,7 +188,6 @@ class MainActivity : Activity() {
                     toast("Instalado: $pkg — permissões concedidas")
                 }
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                    // Só cai aqui se o app NÃO for Device Owner: abre o instalador normal como fallback.
                     val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33)
                         i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                     else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_INTENT)
@@ -186,17 +198,62 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Concede todas as permissões de runtime que o app instalado declara. Escopo: só esse pacote. */
     private fun grantAll(pkg: String) {
         if (!dpm.isDeviceOwnerApp(packageName)) return
         val perms = try {
             packageManager.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS).requestedPermissions
         } catch (e: Exception) { null } ?: return
         for (p in perms) {
-            try {
-                dpm.setPermissionGrantState(admin, pkg, p, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED)
-            } catch (e: Exception) { /* permissões não-runtime são ignoradas */ }
+            try { dpm.setPermissionGrantState(admin, pkg, p, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED) }
+            catch (e: Exception) { /* não-runtime: ignora */ }
         }
+    }
+
+    // ---- HTTP simples (sem dependências) ----
+
+    private fun httpGet(urlStr: String): String {
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = true
+            connectTimeout = 15000; readTimeout = 20000
+        }
+        try {
+            return conn.inputStream.bufferedReader().use { it.readText() }
+        } finally { conn.disconnect() }
+    }
+
+    private fun httpDownload(urlStr: String, dest: File): Boolean {
+        var url = urlStr; var redirects = 0
+        while (redirects < 5) {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
+                connectTimeout = 15000; readTimeout = 60000
+            }
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val loc = conn.getHeaderField("Location"); conn.disconnect()
+                if (loc.isNullOrBlank()) return false
+                url = loc; redirects++; continue
+            }
+            if (code != 200) { conn.disconnect(); return false }
+            try {
+                conn.inputStream.use { input -> dest.outputStream().use { out -> input.copyTo(out) } }
+                return true
+            } finally { conn.disconnect() }
+        }
+        return false
+    }
+
+    private fun parseCatalog(json: String): List<AppEntry> {
+        val arr = JSONObject(json).optJSONArray("apps") ?: return emptyList()
+        val out = ArrayList<AppEntry>()
+        for (i in 0 until arr.length()) {
+            val o = arr.getJSONObject(i)
+            val name = o.optString("name").trim()
+            val pkg = o.optString("package").trim()
+            val url = o.optString("url").trim()
+            if (name.isNotEmpty() && pkg.isNotEmpty() && url.isNotEmpty()) out.add(AppEntry(name, pkg, url))
+        }
+        return out
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
