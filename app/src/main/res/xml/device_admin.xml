@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Vai em: app/src/main/res/xml/device_admin.xml -->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- Device Owner não precisa de políticas extras declaradas aqui para
+             instalar e conceder permissões; o bloco fica vazio de propósito. -->
+    </uses-policies>
+</device-admin>
