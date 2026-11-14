@@ -23,8 +23,12 @@ import java.io.File
  * Catálogo de apps curados, com instalação silenciosa + concessão de permissões.
  * Requer que este app seja DEVICE OWNER (ver README).
  *
- * Onde colocar os APKs (uma vez, via adb):
+ * Coloque os APKs (uma vez, via adb):
  *   adb push waze.apk "/sdcard/Android/data/com.euler.catalog/files/apks/"
+ *
+ * Comportamento: ao abrir, instala automaticamente qualquer APK da pasta cujo
+ * pacote NÃO esteja instalado (ex.: cliente apagou o Waze → reinstala sozinho).
+ * Os botões permitem reinstalar/forçar manualmente a qualquer momento.
  */
 class MainActivity : Activity() {
 
@@ -52,7 +56,10 @@ class MainActivity : Activity() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
         }
+
         buildList()
+        // Instalação automática do que estiver faltando (só se for Device Owner).
+        if (dpm.isDeviceOwnerApp(packageName)) installMissing(silentToast = false)
     }
 
     private fun apkDir(): File {
@@ -61,6 +68,16 @@ class MainActivity : Activity() {
         return d
     }
 
+    private fun listApks(): List<File> =
+        apkDir().listFiles { f -> f.name.endsWith(".apk", true) }?.sortedBy { it.name } ?: emptyList()
+
+    /** Lê o nome do pacote de dentro do arquivo APK, sem instalar. */
+    private fun pkgOf(apk: File): String? =
+        try { packageManager.getPackageArchiveInfo(apk.absolutePath, 0)?.packageName } catch (e: Exception) { null }
+
+    private fun isInstalled(pkg: String): Boolean =
+        try { packageManager.getPackageInfo(pkg, 0); true } catch (e: Exception) { false }
+
     private fun buildList() {
         container.removeAllViews()
         val isOwner = dpm.isDeviceOwnerApp(packageName)
@@ -68,28 +85,39 @@ class MainActivity : Activity() {
         container.addView(TextView(this).apply {
             text = if (isOwner) "Device Owner: OK (instalação silenciosa ativa)"
                    else "ATENÇÃO: não é Device Owner — instalação vai pedir confirmação na tela e NÃO concede permissões sozinho. Rode o dpm set-device-owner (ver README)."
-            setPadding(0, 0, 0, 32)
+            setPadding(0, 0, 0, 24)
         })
 
-        val apks = apkDir().listFiles { f -> f.name.endsWith(".apk", true) }
-            ?.sortedBy { it.name } ?: emptyList()
-
+        val apks = listApks()
         if (apks.isEmpty()) {
             container.addView(TextView(this).apply {
                 text = "Nenhum APK encontrado em:\n${apkDir().absolutePath}\n\n" +
                        "Envie via:\nadb push app.apk \"${apkDir().absolutePath}/\""
             })
-        } else {
-            for (apk in apks) {
-                container.addView(Button(this).apply {
-                    text = "Instalar / reinstalar: ${apk.name}"
-                    setOnClickListener { install(apk) }
-                })
-            }
+            return
+        }
+
+        container.addView(Button(this).apply {
+            text = "Instalar / reparar TODOS os que faltam"
+            setOnClickListener { installMissing(silentToast = false) }
+        })
+        container.addView(TextView(this).apply { text = ""; setPadding(0, 16, 0, 0) })
+
+        for (apk in apks) {
+            val pkg = pkgOf(apk)
+            val installed = pkg != null && isInstalled(pkg)
+            container.addView(TextView(this).apply {
+                text = (pkg ?: apk.name) + if (installed) "  — instalado" else "  — ausente"
+                setPadding(0, 16, 0, 2)
+            })
+            container.addView(Button(this).apply {
+                text = (if (installed) "Reinstalar: " else "Instalar: ") + apk.name
+                setOnClickListener { install(apk) }
+            })
         }
 
         if (isOwner) {
-            container.addView(TextView(this).apply { text = "\n"; setPadding(0, 40, 0, 0) })
+            container.addView(TextView(this).apply { text = ""; setPadding(0, 40, 0, 0) })
             container.addView(Button(this).apply {
                 text = "(manutenção) Liberar Device Owner"
                 setOnClickListener {
@@ -101,6 +129,16 @@ class MainActivity : Activity() {
                 }
             })
         }
+    }
+
+    /** Instala automaticamente os APKs da pasta cujo pacote ainda não está instalado. */
+    private fun installMissing(silentToast: Boolean) {
+        val pending = listApks().filter { apk -> pkgOf(apk)?.let { !isInstalled(it) } ?: true }
+        if (pending.isEmpty()) {
+            if (!silentToast) toast("Tudo já instalado")
+            return
+        }
+        for (apk in pending) install(apk)
     }
 
     private fun install(apk: File) {
@@ -117,10 +155,10 @@ class MainActivity : Activity() {
             }
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or
                 (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
-            val pending = PendingIntent.getBroadcast(
+            val pendingIntent = PendingIntent.getBroadcast(
                 this, sessionId, Intent(ACTION_INSTALL).setPackage(packageName), flags
             )
-            session.commit(pending.intentSender)
+            session.commit(pendingIntent.intentSender)
             session.close()
             toast("Instalando ${apk.name}…")
         } catch (e: Exception) {
@@ -161,7 +199,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_LONG).show()
+    private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
         super.onDestroy()
