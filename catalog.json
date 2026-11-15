@@ -2,9 +2,9 @@
   "_como_usar": "Cada app: name, package, url (link direto do asset na release 'apps'). Para atualizar um app, suba a versao nova na release com o MESMO nome de arquivo; o link e a lista nao mudam.",
   "apps": [
     { "name": "Aurora Store",     "package": "com.aurora.store",             "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/AuroraStore.apk", "desc": "Loja de aplicativos Android", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/aurora.png" },
-    { "name": "MicroG",           "package": "app.revanced.android.gms",     "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/MicroG.apk" },
-    { "name": "Cx File Explorer", "package": "com.cxinventor.file.explorer", "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Cxfile.apk" },
-    { "name": "Equalizer",        "package": "com.jazibkhan.equalizer",      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Equalizer.apk" },
+    { "name": "MicroG",           "package": "app.revanced.android.gms",     "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/MicroG.apk", "desc": "Serviços de base para outros apps", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/microg.png" },
+    { "name": "Cx File Explorer", "package": "com.cxinventor.file.explorer", "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Cxfile.apk", "desc": "Gerenciador de arquivos", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/cxfile.png" },
+    { "name": "Equalizer",        "package": "com.jazibkhan.equalizer",      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Equalizer.apk", "desc": "Equalizador de áudio com presets", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/equalizer.png" },
     { "name": "HMS Core",         "package": "com.huawei.hwid",              "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Hms.apk" },
     { "name": "Cineverse",         "package": "com.cineverse.app",              "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Cineverse_atualizado.apk" },
     { "name": "Every Cine (Celular)",         "package": "com.android.everycine.mob",              "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Everycine.celular.apk" },
@@ -14,7 +14,7 @@
     { "name": "Revanced Manager",         "package": "com.revanced.net.revancedmanager",              "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/ReVanced.apk" },
     { "name": "Velo Play",         "package": "com.global.veloplaytv",              "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/VeloPlay_1.4.apk" },
     { "name": "Youtube",         "package": "app.revanced.android.youtube",              "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/YouTube_BYD.apk" },
-    { "name": "Radarbot",         "package": "com.vialsoft.radarbot_free",   "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Radarbot.apk" },
+    { "name": "Radarbot",         "package": "com.vialsoft.radarbot_free",   "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Radarbot.apk", "desc": "Alertas de radar e limite de velocidade", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/radarbot.png" },
     { "name": "Unlock",           "package": "com.android.packageinstaller", "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Desbloquear.apk" }
   ]
 }
