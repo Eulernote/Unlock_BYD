@@ -12,6 +12,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
+/** Resultado do registro/heartbeat no servidor. */
+data class RegResult(val status: String, val wipe: Boolean, val plan: String)
+
 /** Lógica compartilhada: ativação no servidor + catálogo + remoção de apps. */
 object Store {
 
@@ -50,22 +53,25 @@ object Store {
     fun saveOnboarding(ctx: Context, model: String, name: String) {
         prefs(ctx).edit().putString("model", model).putString("firstname", name).apply()
     }
+    fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").apply() }
     fun displayName(ctx: Context): String {
         val m = prefs(ctx).getString("model", "") ?: ""
         val n = prefs(ctx).getString("firstname", "") ?: ""
         return if (m.isNotEmpty() && n.isNotEmpty()) "$m — $n" else (Build.MODEL ?: "Veículo")
     }
 
-    /** Registra/pinga o servidor. Retorna (status, wipe). status: active | pending | revoked | error */
-    fun register(ctx: Context): Pair<String, Boolean> {
+    /** Registra/pinga o servidor. firstTime=true só no onboarding (cria o cadastro).
+     *  status: active | pending | revoked | deleted | error */
+    fun register(ctx: Context, firstTime: Boolean = false): RegResult {
         return try {
             val id = carId(ctx)
             val nome = displayName(ctx).replace("\"", "")
-            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"}"
-            val resp = httpPostJson(SERVER + "/api/register", body) ?: return Pair("error", false)
+            val extra = if (firstTime) ",\"register\":true" else ""
+            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra}"
+            val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico")
             val o = JSONObject(resp)
-            Pair(o.optString("status", "error"), o.optBoolean("wipe", false))
-        } catch (e: Exception) { Pair("error", false) }
+            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"))
+        } catch (e: Exception) { RegResult("error", false, "basico") }
     }
 
     /** Pede ao servidor permissão pra remover o Device Owner. true se autorizado (uso único). */

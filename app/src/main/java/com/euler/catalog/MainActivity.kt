@@ -55,6 +55,7 @@ class MainActivity : Activity() {
     private val statusViews = HashMap<String, TextView>()
     private var selfLatestVc = 0
     private var selfUrl = ""
+    private var currentPlan = "basico"
     private var selectedModel: String? = null
     private var continueBtn: Button? = null
     private val modelCards = ArrayList<Pair<LinearLayout, String>>()
@@ -72,7 +73,7 @@ class MainActivity : Activity() {
     private val TEXT = 0xFFE8ECF3.toInt(); private val MUTED = 0xFF8793A6.toInt()
     private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
 
-    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String)
+    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,8 +94,8 @@ class MainActivity : Activity() {
     private val pollRunnable = object : Runnable {
         override fun run() {
             Thread {
-                val (st, wipe) = Store.register(this@MainActivity)
-                runOnUiThread { applyStatus(st, wipe, false) }
+                val r = Store.register(this@MainActivity)
+                runOnUiThread { currentPlan = r.plan; applyStatus(r.status, r.wipe, false) }
             }.start()
             poller.postDelayed(this, 30_000)
         }
@@ -137,12 +138,12 @@ class MainActivity : Activity() {
         } catch (e: Exception) {}
     }
 
-    private fun checkGate() {
+    private fun checkGate(firstTime: Boolean = false) {
         container.removeAllViews()
         container.addView(headerView("Verificando ativação…"))
         Thread {
-            val (status, wipe) = Store.register(this)
-            runOnUiThread { applyStatus(status, wipe, true) }
+            val r = Store.register(this, firstTime)
+            runOnUiThread { currentPlan = r.plan; applyStatus(r.status, r.wipe, true) }
         }.start()
     }
 
@@ -159,6 +160,7 @@ class MainActivity : Activity() {
             "revoked" -> { if (wipe) Thread { Store.uninstallAll(applicationContext) }.start()
                 showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
             "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
+            "deleted" -> { Store.clearOnboarding(this); stopPolling(); currentStatus = null; showOnboarding() }
         }
     }
 
@@ -235,7 +237,7 @@ class MainActivity : Activity() {
         send.setOnClickListener {
             val nm = et.text.toString().trim()
             if (nm.isEmpty()) { toast("Digite seu primeiro nome"); return@setOnClickListener }
-            Store.saveOnboarding(this, model, nm); checkGate(); startPolling()
+            Store.saveOnboarding(this, model, nm); checkGate(true); startPolling()
         }
         container.addView(send)
         val back = Button(this); back.text = "Voltar"; styleBtn(back, SURFACE2, MUTED); back.background = rounded(SURFACE2, 9, 1, BORDER); back.setTextColor(MUTED)
@@ -268,13 +270,17 @@ class MainActivity : Activity() {
         }
         if (entries.isEmpty()) { container.addView(tv("Catálogo vazio.", 14f, MUTED)); return }
 
+        val visible = entries.filter { planRank(it.plano) <= planRank(currentPlan) }
+        container.addView(tv("Plano ${planLabel(currentPlan)} · ${visible.size} ${if (visible.size == 1) "app" else "apps"}", 12f, ACCENT, true).apply { setPadding(0, dp(2), 0, dp(10)) })
+        if (visible.isEmpty()) container.addView(tv("Nenhum app liberado para este plano ainda.", 14f, MUTED).apply { setPadding(0, dp(6), 0, dp(6)) })
+
         val all = Button(this); all.text = "Instalar todos os que faltam"; styleBtn(all, SURFACE2, TEXT)
         all.background = rounded(SURFACE2, 10, 1, BORDER); all.setTextColor(TEXT)
         val alp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); alp.topMargin = dp(4); all.layoutParams = alp
-        all.setOnClickListener { enqueueAll(entries) }
+        all.setOnClickListener { enqueueAll(visible) }
         container.addView(all)
 
-        for (e in entries) container.addView(appCard(e))
+        for (e in visible) container.addView(appCard(e))
 
         if (dpm.isDeviceOwnerApp(packageName)) {
             val rm = Button(this); rm.text = "Remover Device Owner"; styleBtn(rm, SURFACE2, MUTED)
@@ -342,6 +348,9 @@ class MainActivity : Activity() {
 
     private fun isInstalled(pkg: String): Boolean = try { packageManager.getPackageInfo(pkg, 0); true } catch (e: Exception) { false }
 
+    private fun planRank(p: String): Int = when (p.lowercase()) { "premium" -> 3; "intermediario", "intermediário" -> 2; else -> 1 }
+    private fun planLabel(p: String): String = when (p.lowercase()) { "premium" -> "Premium"; "intermediario", "intermediário" -> "Intermediário"; else -> "Básico" }
+
     private fun parseCatalog(json: String): List<AppEntry> {
         val arr = JSONObject(json).optJSONArray("apps") ?: return emptyList()
         val out = ArrayList<AppEntry>()
@@ -349,7 +358,7 @@ class MainActivity : Activity() {
             val o = arr.getJSONObject(i)
             val n = o.optString("name").trim(); val p = o.optString("package").trim(); val u = o.optString("url").trim()
             if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty())
-                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim()))
+                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }))
         }
         return out
     }
