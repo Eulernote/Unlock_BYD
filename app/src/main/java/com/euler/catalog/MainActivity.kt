@@ -10,10 +10,16 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
+import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -25,6 +31,8 @@ import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
@@ -34,49 +42,73 @@ class MainActivity : Activity() {
     private lateinit var dpm: DevicePolicyManager
     private lateinit var admin: ComponentName
     private lateinit var container: LinearLayout
+    private val iconCache = HashMap<String, Bitmap>()
 
-    private data class AppEntry(val name: String, val pkg: String, val url: String)
+    // paleta
+    private val BG = 0xFF0A0C10.toInt(); private val SURFACE = 0xFF141922.toInt()
+    private val SURFACE2 = 0xFF1A2029.toInt(); private val BORDER = 0xFF232B38.toInt()
+    private val TEXT = 0xFFE8ECF3.toInt(); private val MUTED = 0xFF8793A6.toInt()
+    private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
+
+    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
         admin = ComponentName(this, CatalogAdminReceiver::class.java)
 
-        val scroll = ScrollView(this)
-        container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(44, 44, 44, 44) }
-        scroll.addView(container)
-        setContentView(scroll)
+        val scroll = ScrollView(this); scroll.setBackgroundColor(BG)
+        container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(22), dp(18), dp(40)) }
+        scroll.addView(container); setContentView(scroll)
 
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL), Context.RECEIVER_NOT_EXPORTED)
         else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
 
-        scheduleDailyCheck()
-        checkGate()
+        scheduleDailyCheck(); checkGate()
     }
 
-    /** Agenda a checagem 1x/dia quando houver internet. */
+    // ---------- helpers de UI ----------
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun rounded(color: Int, r: Int, stroke: Int = 0, strokeColor: Int = 0): GradientDrawable {
+        val g = GradientDrawable(); g.setColor(color); g.cornerRadius = dp(r).toFloat()
+        if (stroke > 0) g.setStroke(dp(stroke), strokeColor); return g
+    }
+    private fun tv(text: String, size: Float, color: Int, bold: Boolean = false): TextView {
+        val t = TextView(this); t.text = text; t.textSize = size; t.setTextColor(color)
+        if (bold) t.setTypeface(null, Typeface.BOLD); return t
+    }
+    private fun headerView(subtitle: String): LinearLayout {
+        val h = LinearLayout(this); h.orientation = LinearLayout.HORIZONTAL; h.gravity = Gravity.CENTER_VERTICAL
+        h.setPadding(0, 0, 0, dp(18))
+        val logo = ImageView(this); logo.layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
+        logo.background = rounded(ACCENT, 12); logo.setPadding(dp(11), dp(11), dp(11), dp(11)); logo.setImageResource(R.drawable.ic_lock)
+        val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(dp(12), 0, 0, 0)
+        col.addView(tv("Unlock BYD", 17f, TEXT, true)); col.addView(tv(subtitle, 12f, MUTED))
+        h.addView(logo); h.addView(col); return h
+    }
+    private fun styleBtn(b: Button, bg: Int, fg: Int) {
+        b.background = rounded(bg, 9); b.setTextColor(fg); b.isAllCaps = false; b.textSize = 13f
+        b.setPadding(dp(16), dp(8), dp(16), dp(8)); b.minHeight = 0; b.minimumHeight = 0
+    }
+
     private fun scheduleDailyCheck() {
         try {
             val req = PeriodicWorkRequest.Builder(CheckWorker::class.java, 24, TimeUnit.HOURS)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-                .build()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
             WorkManager.getInstance(this).enqueueUniquePeriodicWork("ubyd-check", ExistingPeriodicWorkPolicy.KEEP, req)
-        } catch (e: Exception) { /* ignora */ }
+        } catch (e: Exception) {}
     }
 
-    /** Consulta o servidor e decide: abrir a loja, travar ou travar+apagar. */
     private fun checkGate() {
         container.removeAllViews()
-        container.addView(TextView(this).apply { text = "Verificando ativação…"; textSize = 15f; setPadding(0, 40, 0, 0) })
+        container.addView(headerView("Verificando ativação…"))
         Thread {
             val (status, wipe) = Store.register(this)
             runOnUiThread {
                 when (status) {
                     "active" -> showCatalog()
-                    "revoked" -> {
-                        if (wipe) Thread { Store.uninstallAll(applicationContext) }.start()
-                        showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.")
-                    }
+                    "revoked" -> { if (wipe) Thread { Store.uninstallAll(applicationContext) }.start()
+                        showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
                     "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
                     else -> showLocked("Sem conexão", "Não foi possível verificar a ativação. Confira a internet do carro e tente de novo.")
                 }
@@ -86,27 +118,24 @@ class MainActivity : Activity() {
 
     private fun showLocked(title: String, msg: String) {
         container.removeAllViews()
-        container.gravity = Gravity.CENTER_HORIZONTAL
-        container.addView(TextView(this).apply { text = title; textSize = 22f; setPadding(0, 60, 0, 10) })
-        container.addView(TextView(this).apply { text = msg; textSize = 14f; gravity = Gravity.CENTER; setPadding(0, 0, 0, 30) })
-        container.addView(TextView(this).apply { text = "Código do veículo"; textSize = 12f; setPadding(0, 10, 0, 6) })
-        container.addView(TextView(this).apply {
-            text = Store.carId(this@MainActivity); textSize = 30f; setPadding(0, 0, 0, 36)
-            typeface = android.graphics.Typeface.MONOSPACE
-        })
-        container.addView(Button(this).apply { text = "Verificar novamente"; setOnClickListener { container.gravity = Gravity.NO_GRAVITY; checkGate() } })
+        container.addView(headerView("Loja do veículo"))
+        val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL; card.gravity = Gravity.CENTER_HORIZONTAL
+        card.background = rounded(SURFACE, 16, 1, BORDER); card.setPadding(dp(22), dp(30), dp(22), dp(30))
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); lp.topMargin = dp(24); card.layoutParams = lp
+        card.addView(tv(title, 20f, TEXT, true).apply { gravity = Gravity.CENTER })
+        card.addView(tv(msg, 13.5f, MUTED).apply { gravity = Gravity.CENTER; setPadding(0, dp(8), 0, dp(24)) })
+        card.addView(tv("Código do veículo", 12f, MUTED))
+        card.addView(tv(Store.carId(this), 30f, ACCENT, true).apply { setTypeface(Typeface.MONOSPACE, Typeface.BOLD); setPadding(0, dp(4), 0, dp(26)) })
+        val b = Button(this); b.text = "Verificar novamente"; styleBtn(b, ACCENT, 0xFF04201D.toInt()); b.setOnClickListener { checkGate() }
+        card.addView(b)
+        container.addView(card)
     }
 
-    // ---------------- Catálogo (quando ATIVO) ----------------
-
+    // ---------- Catálogo (ATIVO) ----------
     private fun showCatalog() {
         container.removeAllViews()
-        container.gravity = Gravity.NO_GRAVITY
-        container.addView(TextView(this).apply {
-            text = if (dpm.isDeviceOwnerApp(packageName)) "Catálogo Unlock BYD" else "ATENÇÃO: não é Device Owner — rode o dpm set-device-owner."
-            textSize = 16f; setPadding(0, 0, 0, 16)
-        })
-        container.addView(TextView(this).apply { text = "Carregando apps…"; setPadding(0, 10, 0, 0) })
+        container.addView(headerView("Loja do veículo"))
+        container.addView(tv("Carregando apps…", 14f, MUTED).apply { setPadding(0, dp(12), 0, 0) })
         Thread {
             val entries = try { parseCatalog(Store.httpGet(Store.CATALOG_URL) ?: "") } catch (e: Exception) { null }
             runOnUiThread { renderCatalog(entries) }
@@ -115,25 +144,60 @@ class MainActivity : Activity() {
 
     private fun renderCatalog(entries: List<AppEntry>?) {
         container.removeAllViews()
-        container.addView(TextView(this).apply {
-            text = if (dpm.isDeviceOwnerApp(packageName)) "Catálogo Unlock BYD" else "ATENÇÃO: não é Device Owner."
-            textSize = 16f; setPadding(0, 0, 0, 16)
-        })
+        container.addView(headerView("Loja do veículo"))
+        if (!dpm.isDeviceOwnerApp(packageName))
+            container.addView(tv("Atenção: não é Device Owner — rode o dpm set-device-owner.", 12f, RED).apply { setPadding(0, 0, 0, dp(8)) })
         if (entries == null) {
-            container.addView(TextView(this).apply { text = "Não consegui carregar a lista. Verifique a internet." })
-            container.addView(Button(this).apply { text = "Tentar de novo"; setOnClickListener { showCatalog() } })
-            return
+            container.addView(tv("Não consegui carregar a lista. Verifique a internet.", 14f, MUTED).apply { setPadding(0, dp(10), 0, dp(12)) })
+            val b = Button(this); b.text = "Tentar de novo"; styleBtn(b, ACCENT, 0xFF04201D.toInt()); b.setOnClickListener { showCatalog() }; container.addView(b); return
         }
-        if (entries.isEmpty()) { container.addView(TextView(this).apply { text = "Catálogo vazio." }); return }
+        if (entries.isEmpty()) { container.addView(tv("Catálogo vazio.", 14f, MUTED)); return }
 
-        container.addView(Button(this).apply {
-            text = "Instalar TODOS os que faltam"
-            setOnClickListener { entries.filter { !isInstalled(it.pkg) }.forEach { installFromWeb(it) } }
-        })
-        for (e in entries) {
-            val inst = isInstalled(e.pkg)
-            container.addView(TextView(this).apply { text = "${e.name}  (${e.pkg}) — " + if (inst) "instalado" else "disponível"; setPadding(0, 16, 0, 2) })
-            container.addView(Button(this).apply { text = (if (inst) "Reinstalar " else "Instalar ") + e.name; setOnClickListener { installFromWeb(e) } })
+        val all = Button(this); all.text = "Instalar todos os que faltam"; styleBtn(all, SURFACE2, TEXT)
+        all.background = rounded(SURFACE2, 10, 1, BORDER); all.setTextColor(TEXT)
+        val alp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); alp.topMargin = dp(4); all.layoutParams = alp
+        all.setOnClickListener { entries.filter { !isInstalled(it.pkg) }.forEach { installFromWeb(it) } }
+        container.addView(all)
+
+        for (e in entries) container.addView(appCard(e))
+    }
+
+    private fun appCard(e: AppEntry): LinearLayout {
+        val card = LinearLayout(this); card.orientation = LinearLayout.HORIZONTAL; card.gravity = Gravity.CENTER_VERTICAL
+        card.background = rounded(SURFACE, 14, 1, BORDER); card.setPadding(dp(14), dp(12), dp(14), dp(12))
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); lp.topMargin = dp(10); card.layoutParams = lp
+
+        val icon = ImageView(this); icon.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+        icon.background = rounded(SURFACE2, 12, 1, BORDER); icon.setPadding(dp(8), dp(8), dp(8), dp(8)); setIcon(icon, e)
+
+        val info = LinearLayout(this); info.orientation = LinearLayout.VERTICAL
+        val ilp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); ilp.leftMargin = dp(12); ilp.rightMargin = dp(10); info.layoutParams = ilp
+        info.addView(tv(e.name, 14.5f, TEXT, true))
+        if (e.desc.isNotEmpty()) info.addView(tv(e.desc, 12f, MUTED).apply { setPadding(0, dp(3), 0, 0) })
+        val inst = isInstalled(e.pkg)
+        info.addView(tv(if (inst) "Instalado" else "Disponível", 11f, if (inst) GREEN else MUTED).apply { setPadding(0, dp(4), 0, 0) })
+
+        val btn = Button(this); btn.text = if (inst) "Reinstalar" else "Instalar"
+        styleBtn(btn, if (inst) SURFACE2 else ACCENT, if (inst) TEXT else 0xFF04201D.toInt())
+        if (inst) btn.background = rounded(SURFACE2, 9, 1, BORDER)
+        btn.setOnClickListener { installFromWeb(e) }
+
+        card.addView(icon); card.addView(info); card.addView(btn); return card
+    }
+
+    private fun setIcon(iv: ImageView, e: AppEntry) {
+        if (isInstalled(e.pkg)) { try { iv.setImageDrawable(packageManager.getApplicationIcon(e.pkg)); iv.setPadding(dp(4), dp(4), dp(4), dp(4)); return } catch (ex: Exception) {} }
+        iv.setImageResource(R.drawable.ic_app)
+        val url = e.icon
+        if (url.isNotEmpty()) {
+            iconCache[url]?.let { iv.setImageBitmap(it); iv.setPadding(dp(4), dp(4), dp(4), dp(4)); return }
+            Thread {
+                try {
+                    val b = downloadBytes(url)
+                    if (b != null) { val bmp = BitmapFactory.decodeByteArray(b, 0, b.size)
+                        if (bmp != null) { iconCache[url] = bmp; runOnUiThread { iv.setImageBitmap(bmp); iv.setPadding(dp(4), dp(4), dp(4), dp(4)) } } }
+                } catch (ex: Exception) {}
+            }.start()
         }
     }
 
@@ -145,11 +209,13 @@ class MainActivity : Activity() {
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val n = o.optString("name").trim(); val p = o.optString("package").trim(); val u = o.optString("url").trim()
-            if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty()) out.add(AppEntry(n, p, u))
+            if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty())
+                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim()))
         }
         return out
     }
 
+    // ---------- download / install ----------
     private fun installFromWeb(e: AppEntry) {
         toast("Baixando ${e.name}…")
         Thread {
@@ -170,9 +236,7 @@ class MainActivity : Activity() {
     private fun download(urlStr: String, dest: File): Boolean {
         var url = urlStr; var redirects = 0
         while (redirects < 6) {
-            val c = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
-                instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000
-            }
+            val c = (URL(url).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000 }
             val code = c.responseCode
             if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return false; url = loc; redirects++; continue }
             if (code != 200) { c.disconnect(); return false }
@@ -181,16 +245,26 @@ class MainActivity : Activity() {
         return false
     }
 
+    private fun downloadBytes(urlStr: String): ByteArray? {
+        var url = urlStr; var redirects = 0
+        while (redirects < 6) {
+            val c = (URL(url).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 12000; readTimeout = 20000 }
+            val code = c.responseCode
+            if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return null; url = loc; redirects++; continue }
+            if (code != 200) { c.disconnect(); return null }
+            try { return c.inputStream.use { it.readBytes() } } finally { c.disconnect() }
+        }
+        return null
+    }
+
     private fun extractSplits(file: File, pkg: String): List<File>? {
         ZipFile(file).use { zf ->
             val apkEntries = zf.entries().toList().filter { !it.isDirectory && it.name.endsWith(".apk", true) && !it.name.contains("standalones/") }
             if (apkEntries.isEmpty()) return null
             val outDir = File(cacheDir, "sp_$pkg").apply { deleteRecursively(); mkdirs() }
-            var universal: File? = null
-            val splits = ArrayList<File>()
+            var universal: File? = null; val splits = ArrayList<File>()
             for (entry in apkEntries) {
-                val base = entry.name.substringAfterLast('/')
-                val out = File(outDir, base)
+                val base = entry.name.substringAfterLast('/'); val out = File(outDir, base)
                 zf.getInputStream(entry).use { inp -> out.outputStream().use { inp.copyTo(it) } }
                 if (base.equals("universal.apk", true)) universal = out
                 splits.add(out)
@@ -201,18 +275,12 @@ class MainActivity : Activity() {
 
     private fun installSession(apks: List<File>) {
         val pi = packageManager.packageInstaller
-        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
-        val sessionId = pi.createSession(params)
-        val session = pi.openSession(sessionId)
-        var i = 0
-        for (f in apks) {
-            session.openWrite("split_$i.apk", 0, f.length()).use { out -> f.inputStream().use { it.copyTo(out) }; session.fsync(out) }
-            i++
-        }
+        val sessionId = pi.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+        val session = pi.openSession(sessionId); var i = 0
+        for (f in apks) { session.openWrite("split_$i.apk", 0, f.length()).use { out -> f.inputStream().use { it.copyTo(out) }; session.fsync(out) }; i++ }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
         val pending = PendingIntent.getBroadcast(this, sessionId, Intent(ACTION_INSTALL).setPackage(packageName), flags)
-        session.commit(pending.intentSender)
-        session.close()
+        session.commit(pending.intentSender); session.close()
     }
 
     private val statusReceiver = object : BroadcastReceiver() {
@@ -222,6 +290,7 @@ class MainActivity : Activity() {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                     if (pkg != null) grantAll(pkg)
                     toast("Instalado: $pkg — permissões concedidas")
+                    if (dpm.isDeviceOwnerApp(packageName)) checkGateSilent()
                 }
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                     val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
@@ -233,6 +302,9 @@ class MainActivity : Activity() {
         }
     }
 
+    /** Após instalar, atualiza os cards (sem recarregar o header "Verificando"). */
+    private fun checkGateSilent() { showCatalog() }
+
     private fun grantAll(pkg: String) {
         if (!dpm.isDeviceOwnerApp(packageName)) return
         val perms = try { packageManager.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS).requestedPermissions } catch (e: Exception) { null } ?: return
@@ -240,6 +312,5 @@ class MainActivity : Activity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
-
     override fun onDestroy() { super.onDestroy(); try { unregisterReceiver(statusReceiver) } catch (e: Exception) {} }
 }
