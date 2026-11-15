@@ -1,7 +1,7 @@
 {
   "_como_usar": "Cada app: name, package, url (link direto do asset na release 'apps'). Para atualizar um app, suba a versao nova na release com o MESMO nome de arquivo; o link e a lista nao mudam.",
   "apps": [
-    { "name": "Aurora Store",     "package": "com.aurora.store",             "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/AuroraStore.apk", "desc": "Loja de aplicativos Android", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/aurora.png" },
+    { "name": "Aurora Store",     "package": "com.aurora.store",             "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/AuroraStore.apk", "desc": "Loja de aplicativos Android", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/aurora.png", "plano": "basico" },
     { "name": "MicroG",           "package": "app.revanced.android.gms",     "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/MicroG.apk", "desc": "Serviços de base para outros apps", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/microg.png" },
     { "name": "Cx File Explorer", "package": "com.cxinventor.file.explorer", "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Cxfile.apk", "desc": "Gerenciador de arquivos", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/cxfile.png" },
     { "name": "Equalizer",        "package": "com.jazibkhan.equalizer",      "url": "https://github.com/Eulernote/euler-catalog/releases/download/apps/Equalizer.apk", "desc": "Equalizador de áudio com presets", "icon": "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/icons/equalizer.png" },
