@@ -7,6 +7,15 @@ android {
     namespace = "com.euler.catalog"
     compileSdk = 34
 
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("keystore.jks")
+            storePassword = "ubydstore"
+            keyAlias = "ubyd"
+            keyPassword = "ubydstore"
+        }
+    }
+
     defaultConfig {
         applicationId = "com.euler.catalog"
         minSdk = 24
