@@ -46,6 +46,14 @@ object Store {
         } catch (e: Exception) { Pair("error", false) }
     }
 
+    /** Pede ao servidor permissão pra remover o Device Owner. true se autorizado (uso único). */
+    fun requestRemoval(ctx: Context): Boolean {
+        return try {
+            val resp = httpPostJson(SERVER + "/api/removal", "{\"id\":\"${carId(ctx)}\"}") ?: return false
+            JSONObject(resp).optBoolean("allowed", false)
+        } catch (e: Exception) { false }
+    }
+
     /** Pacotes listados no catálogo (os apps da loja). */
     fun catalogPackages(): List<String> {
         return try {

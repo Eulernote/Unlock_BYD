@@ -160,6 +160,28 @@ class MainActivity : Activity() {
         container.addView(all)
 
         for (e in entries) container.addView(appCard(e))
+
+        if (dpm.isDeviceOwnerApp(packageName)) {
+            val rm = Button(this); rm.text = "Remover Device Owner"; styleBtn(rm, SURFACE2, MUTED)
+            rm.background = rounded(SURFACE2, 9, 1, BORDER); rm.setTextColor(MUTED)
+            val rlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); rlp.topMargin = dp(30); rm.layoutParams = rlp
+            rm.setOnClickListener { requestRemoval() }
+            container.addView(rm)
+            container.addView(tv("Requer autorização no painel da Unlock BYD.", 11f, MUTED).apply { setPadding(0, dp(6), 0, 0); gravity = Gravity.CENTER })
+        }
+    }
+
+    private fun requestRemoval() {
+        toast("Verificando autorização…")
+        Thread {
+            val allowed = Store.requestRemoval(this)
+            runOnUiThread {
+                if (allowed) {
+                    try { dpm.clearDeviceOwnerApp(packageName); toast("Device Owner removido"); checkGate() }
+                    catch (e: Exception) { toast("Falha ao remover: ${e.message}") }
+                } else toast("Remoção não autorizada. Solicite no painel.")
+            }
+        }.start()
     }
 
     private fun appCard(e: AppEntry): LinearLayout {
