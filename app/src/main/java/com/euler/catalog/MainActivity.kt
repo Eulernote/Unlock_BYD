@@ -56,15 +56,34 @@ class MainActivity : Activity() {
     private var selfLatestVc = 0
     private var selfUrl = ""
     private var currentPlan = "basico"
+    private var currentGrupo = "byd_simples"
     private var selectedModel: String? = null
     private var continueBtn: Button? = null
     private val modelCards = ArrayList<Pair<LinearLayout, String>>()
+    private data class Model(val name: String, val avail: Boolean, val grupo: String, val ask: Boolean)
     private val MODELS = listOf(
-        "Dolphin Mini" to true, "Dolphin GS" to true, "Dolphin SE" to true, "Dolphin Plus" to true,
-        "King" to true, "Yuan Pro" to true, "Yuan Plus" to true, "Song Pro" to true, "Song Plus" to true,
-        "Song Premium" to true, "Atto 2" to true, "Atto 8" to true, "Shark" to true, "Seal" to true,
-        "Sealion" to false, "Geely EX2 Pro" to true, "Geely EX2 Max" to true, "Tiggo 7" to true,
-        "Tiggo 8" to true, "Omoda 5" to true, "Omoda E5" to true, "Jaecoo 7" to true
+        Model("Dolphin Mini", true, "byd_simples", false),
+        Model("Dolphin GS", true, "byd_simples", false),
+        Model("Dolphin SE", true, "byd_google", false),
+        Model("Dolphin Plus", true, "byd_simples", false),
+        Model("King", true, "byd_simples", false),
+        Model("Yuan Pro", true, "byd_simples", true),
+        Model("Yuan Plus", true, "byd_simples", true),
+        Model("Song Pro", true, "byd_simples", true),
+        Model("Song Plus", true, "byd_simples", true),
+        Model("Song Premium", true, "byd_simples", true),
+        Model("Atto 2", true, "byd_google", false),
+        Model("Atto 8", true, "byd_google", false),
+        Model("Shark", true, "byd_simples", false),
+        Model("Seal", true, "byd_simples", false),
+        Model("Sealion", false, "byd_simples", false),
+        Model("Geely EX2 Pro", true, "geely", false),
+        Model("Geely EX2 Max", true, "geely", false),
+        Model("Tiggo 7", true, "chery", false),
+        Model("Tiggo 8", true, "chery", false),
+        Model("Omoda 5", true, "chery", false),
+        Model("Omoda E5", true, "chery", false),
+        Model("Jaecoo 7", true, "chery", false)
     )
 
     // paleta
@@ -73,7 +92,7 @@ class MainActivity : Activity() {
     private val TEXT = 0xFFE8ECF3.toInt(); private val MUTED = 0xFF8793A6.toInt()
     private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
 
-    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico")
+    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,7 +114,7 @@ class MainActivity : Activity() {
         override fun run() {
             Thread {
                 val r = Store.register(this@MainActivity)
-                runOnUiThread { currentPlan = r.plan; applyStatus(r.status, r.wipe, false) }
+                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, false) }
             }.start()
             poller.postDelayed(this, 30_000)
         }
@@ -143,7 +162,7 @@ class MainActivity : Activity() {
         container.addView(headerView("Verificando ativação…"))
         Thread {
             val r = Store.register(this, firstTime)
-            runOnUiThread { currentPlan = r.plan; applyStatus(r.status, r.wipe, true) }
+            runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, true) }
         }.start()
     }
 
@@ -188,7 +207,7 @@ class MainActivity : Activity() {
 
         val sc = HorizontalScrollView(this); sc.isHorizontalScrollBarEnabled = false
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
-        for ((name, avail) in MODELS) row.addView(modelCard(name, avail))
+        for (m in MODELS) row.addView(modelCard(m.name, m.avail))
         sc.addView(row); container.addView(sc)
 
         val cont = Button(this); cont.text = "Continuar"; styleBtn(cont, ACCENT, 0xFF04201D.toInt()); cont.isEnabled = false; cont.alpha = 0.45f
@@ -237,7 +256,9 @@ class MainActivity : Activity() {
         send.setOnClickListener {
             val nm = et.text.toString().trim()
             if (nm.isEmpty()) { toast("Digite seu primeiro nome"); return@setOnClickListener }
-            Store.saveOnboarding(this, model, nm); checkGate(true); startPolling()
+            val m = MODELS.firstOrNull { it.name == model }
+            Store.saveOnboarding(this, model, nm, m?.grupo ?: "byd_simples", m?.ask ?: false)
+            checkGate(true); startPolling()
         }
         container.addView(send)
         val back = Button(this); back.text = "Voltar"; styleBtn(back, SURFACE2, MUTED); back.background = rounded(SURFACE2, 9, 1, BORDER); back.setTextColor(MUTED)
@@ -270,8 +291,8 @@ class MainActivity : Activity() {
         }
         if (entries.isEmpty()) { container.addView(tv("Catálogo vazio.", 14f, MUTED)); return }
 
-        val visible = entries.filter { planRank(it.plano) <= planRank(currentPlan) }
-        container.addView(tv("Plano ${planLabel(currentPlan)} · ${visible.size} ${if (visible.size == 1) "app" else "apps"}", 12f, ACCENT, true).apply { setPadding(0, dp(2), 0, dp(10)) })
+        val visible = entries.filter { (it.grupos.isEmpty() || it.grupos.contains(currentGrupo)) && planRank(it.plano) <= planRank(currentPlan) }
+        container.addView(tv("${grupoLabel(currentGrupo)} · Plano ${planLabel(currentPlan)} · ${visible.size} ${if (visible.size == 1) "app" else "apps"}", 12f, ACCENT, true).apply { setPadding(0, dp(2), 0, dp(10)) })
         if (visible.isEmpty()) container.addView(tv("Nenhum app liberado para este plano ainda.", 14f, MUTED).apply { setPadding(0, dp(6), 0, dp(6)) })
 
         val all = Button(this); all.text = "Instalar todos os que faltam"; styleBtn(all, SURFACE2, TEXT)
@@ -350,6 +371,7 @@ class MainActivity : Activity() {
 
     private fun planRank(p: String): Int = when (p.lowercase()) { "premium" -> 3; "intermediario", "intermediário" -> 2; else -> 1 }
     private fun planLabel(p: String): String = when (p.lowercase()) { "premium" -> "Premium"; "intermediario", "intermediário" -> "Intermediário"; else -> "Básico" }
+    private fun grupoLabel(g: String): String = when (g.lowercase()) { "byd_google" -> "BYD · Google"; "chery" -> "Chery"; "geely" -> "Geely"; else -> "BYD · Simples" }
 
     private fun parseCatalog(json: String): List<AppEntry> {
         val arr = JSONObject(json).optJSONArray("apps") ?: return emptyList()
@@ -357,8 +379,11 @@ class MainActivity : Activity() {
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
             val n = o.optString("name").trim(); val p = o.optString("package").trim(); val u = o.optString("url").trim()
-            if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty())
-                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }))
+            if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty()) {
+                val g = ArrayList<String>()
+                o.optJSONArray("grupos")?.let { for (k in 0 until it.length()) { val v = it.optString(k).trim().lowercase(); if (v.isNotEmpty()) g.add(v) } }
+                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g))
+            }
         }
         return out
     }

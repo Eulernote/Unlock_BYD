@@ -13,7 +13,7 @@ import java.net.URL
 import java.security.MessageDigest
 
 /** Resultado do registro/heartbeat no servidor. */
-data class RegResult(val status: String, val wipe: Boolean, val plan: String)
+data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String)
 
 /** Lógica compartilhada: ativação no servidor + catálogo + remoção de apps. */
 object Store {
@@ -50,10 +50,11 @@ object Store {
     // ---- onboarding (modelo + primeiro nome) ----
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("ubyd", Context.MODE_PRIVATE)
     fun isOnboarded(ctx: Context): Boolean = !(prefs(ctx).getString("firstname", "") ?: "").isNullOrEmpty()
-    fun saveOnboarding(ctx: Context, model: String, name: String) {
-        prefs(ctx).edit().putString("model", model).putString("firstname", name).apply()
+    fun saveOnboarding(ctx: Context, model: String, name: String, grupo: String, ask: Boolean) {
+        prefs(ctx).edit().putString("model", model).putString("firstname", name)
+            .putString("grupo", grupo).putBoolean("ask", ask).apply()
     }
-    fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").apply() }
+    fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").remove("grupo").remove("ask").apply() }
     fun displayName(ctx: Context): String {
         val m = prefs(ctx).getString("model", "") ?: ""
         val n = prefs(ctx).getString("firstname", "") ?: ""
@@ -66,12 +67,14 @@ object Store {
         return try {
             val id = carId(ctx)
             val nome = displayName(ctx).replace("\"", "")
-            val extra = if (firstTime) ",\"register\":true" else ""
+            val grupo = prefs(ctx).getString("grupo", "byd_simples")
+            val ask = prefs(ctx).getBoolean("ask", false)
+            val extra = if (firstTime) ",\"register\":true,\"grupo\":\"$grupo\",\"ask\":$ask" else ""
             val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra}"
-            val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico")
+            val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
-            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"))
-        } catch (e: Exception) { RegResult("error", false, "basico") }
+            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"))
+        } catch (e: Exception) { RegResult("error", false, "basico", "byd_simples") }
     }
 
     /** Pede ao servidor permissão pra remover o Device Owner. true se autorizado (uso único). */
