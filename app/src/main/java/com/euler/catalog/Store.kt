@@ -20,8 +20,8 @@ object Store {
 
     // Servidor de ativação (Cloudflare Worker) da Unlock BYD.
     const val SERVER = "https://euler-catalog.eulerfilhogontijodamata.workers.dev"
-    const val CATALOG_URL = "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/catalog.json"
-    const val SELF_VERSION_URL = "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/app_version.json"
+    const val CATALOG_URL = "https://raw.githubusercontent.com/Eulernote/Unlock_BYD/main/catalog.json"
+    const val SELF_VERSION_URL = "https://raw.githubusercontent.com/Eulernote/Unlock_BYD/main/app_version.json"
 
     /** Última versão publicada do próprio app (versionCode, url do apk). */
     fun selfVersion(): Pair<Int, String> {
