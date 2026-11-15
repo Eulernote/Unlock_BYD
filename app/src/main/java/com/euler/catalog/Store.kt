@@ -18,6 +18,16 @@ object Store {
     // Servidor de ativação (Cloudflare Worker) da Unlock BYD.
     const val SERVER = "https://euler-catalog.eulerfilhogontijodamata.workers.dev"
     const val CATALOG_URL = "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/catalog.json"
+    const val SELF_VERSION_URL = "https://raw.githubusercontent.com/Eulernote/euler-catalog/main/app_version.json"
+
+    /** Última versão publicada do próprio app (versionCode, url do apk). */
+    fun selfVersion(): Pair<Int, String> {
+        return try {
+            val j = httpGet(SELF_VERSION_URL) ?: return Pair(0, "")
+            val o = JSONObject(j)
+            Pair(o.optInt("versionCode", 0), o.optString("url", ""))
+        } catch (e: Exception) { Pair(0, "") }
+    }
 
     /** ID estável e curto do carro (derivado do ANDROID_ID). Ex.: A7F3-2901 */
     fun carId(ctx: Context): String {

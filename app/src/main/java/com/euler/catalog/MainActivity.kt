@@ -49,6 +49,12 @@ class MainActivity : Activity() {
     private val iconCache = HashMap<String, Bitmap>()
     private val poller = Handler(Looper.getMainLooper())
     private var currentStatus: String? = null
+    private val installQueue = ArrayDeque<AppEntry>()
+    private var installing = false
+    private var current: AppEntry? = null
+    private val statusViews = HashMap<String, TextView>()
+    private var selfLatestVc = 0
+    private var selfUrl = ""
     private var selectedModel: String? = null
     private var continueBtn: Button? = null
     private val modelCards = ArrayList<Pair<LinearLayout, String>>()
@@ -245,15 +251,17 @@ class MainActivity : Activity() {
         container.addView(tv("Carregando apps…", 14f, MUTED).apply { setPadding(0, dp(12), 0, 0) })
         Thread {
             val entries = try { parseCatalog(Store.httpGet(Store.CATALOG_URL) ?: "") } catch (e: Exception) { null }
-            runOnUiThread { renderCatalog(entries) }
+            val sv = Store.selfVersion()
+            runOnUiThread { selfLatestVc = sv.first; selfUrl = sv.second; renderCatalog(entries) }
         }.start()
     }
 
     private fun renderCatalog(entries: List<AppEntry>?) {
-        container.removeAllViews()
+        container.removeAllViews(); statusViews.clear()
         container.addView(headerView("Loja do veículo"))
         if (!dpm.isDeviceOwnerApp(packageName))
             container.addView(tv("Atenção: não é Device Owner — rode o dpm set-device-owner.", 12f, RED).apply { setPadding(0, 0, 0, dp(8)) })
+        container.addView(selfCard())
         if (entries == null) {
             container.addView(tv("Não consegui carregar a lista. Verifique a internet.", 14f, MUTED).apply { setPadding(0, dp(10), 0, dp(12)) })
             val b = Button(this); b.text = "Tentar de novo"; styleBtn(b, ACCENT, 0xFF04201D.toInt()); b.setOnClickListener { showCatalog() }; container.addView(b); return
@@ -263,7 +271,7 @@ class MainActivity : Activity() {
         val all = Button(this); all.text = "Instalar todos os que faltam"; styleBtn(all, SURFACE2, TEXT)
         all.background = rounded(SURFACE2, 10, 1, BORDER); all.setTextColor(TEXT)
         val alp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); alp.topMargin = dp(4); all.layoutParams = alp
-        all.setOnClickListener { entries.filter { !isInstalled(it.pkg) }.forEach { installFromWeb(it) } }
+        all.setOnClickListener { enqueueAll(entries) }
         container.addView(all)
 
         for (e in entries) container.addView(appCard(e))
@@ -304,12 +312,14 @@ class MainActivity : Activity() {
         info.addView(tv(e.name, 14.5f, TEXT, true))
         if (e.desc.isNotEmpty()) info.addView(tv(e.desc, 12f, MUTED).apply { setPadding(0, dp(3), 0, 0) })
         val inst = isInstalled(e.pkg)
-        info.addView(tv(if (inst) "Instalado" else "Disponível", 11f, if (inst) GREEN else MUTED).apply { setPadding(0, dp(4), 0, 0) })
+        val st = tv(if (inst) "Instalado" else "Disponível", 11f, if (inst) GREEN else MUTED).apply { setPadding(0, dp(4), 0, 0) }
+        statusViews[e.pkg] = st
+        info.addView(st)
 
         val btn = Button(this); btn.text = if (inst) "Reinstalar" else "Instalar"
         styleBtn(btn, if (inst) SURFACE2 else ACCENT, if (inst) TEXT else 0xFF04201D.toInt())
         if (inst) btn.background = rounded(SURFACE2, 9, 1, BORDER)
-        btn.setOnClickListener { installFromWeb(e) }
+        btn.setOnClickListener { enqueue(e) }
 
         card.addView(icon); card.addView(info); card.addView(btn); return card
     }
@@ -344,32 +354,89 @@ class MainActivity : Activity() {
         return out
     }
 
-    // ---------- download / install ----------
-    private fun installFromWeb(e: AppEntry) {
-        toast("Baixando ${e.name}…")
+    // ---------- auto-atualização do próprio app ----------
+    private fun ownVersionCode(): Int = try {
+        val pi = packageManager.getPackageInfo(packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode.toInt() else @Suppress("DEPRECATION") pi.versionCode
+    } catch (e: Exception) { 0 }
+
+    private fun selfCard(): LinearLayout {
+        val updatable = selfLatestVc > ownVersionCode() && selfUrl.isNotEmpty()
+        val card = LinearLayout(this); card.orientation = LinearLayout.HORIZONTAL; card.gravity = Gravity.CENTER_VERTICAL
+        card.background = rounded(SURFACE, 14, if (updatable) 2 else 1, if (updatable) ACCENT else BORDER); card.setPadding(dp(14), dp(12), dp(14), dp(12))
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); lp.topMargin = dp(4); lp.bottomMargin = dp(6); card.layoutParams = lp
+        val icon = ImageView(this); icon.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
+        icon.background = rounded(0xFFFFFFFF.toInt(), 12); icon.setPadding(dp(6), dp(6), dp(6), dp(6)); icon.setImageResource(R.mipmap.ic_launcher)
+        val info = LinearLayout(this); info.orientation = LinearLayout.VERTICAL
+        val ilp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); ilp.leftMargin = dp(12); ilp.rightMargin = dp(10); info.layoutParams = ilp
+        info.addView(tv("Unlock BYD", 14.5f, TEXT, true))
+        info.addView(tv("Aplicativo da loja", 12f, MUTED).apply { setPadding(0, dp(3), 0, 0) })
+        val st = tv(if (updatable) "Atualização disponível" else "Instalado · atualizado", 11f, if (updatable) ACCENT else GREEN).apply { setPadding(0, dp(4), 0, 0) }
+        statusViews[packageName] = st; info.addView(st)
+        card.addView(icon); card.addView(info)
+        if (updatable) {
+            val btn = Button(this); btn.text = "Atualizar"; styleBtn(btn, ACCENT, 0xFF04201D.toInt())
+            btn.setOnClickListener { enqueue(AppEntry("Unlock BYD", packageName, selfUrl, "", "")) }
+            card.addView(btn)
+        }
+        return card
+    }
+
+    // ---------- fila de download/instalação (um por vez) ----------
+    private fun enqueueAll(entries: List<AppEntry>) { entries.filter { !isInstalled(it.pkg) }.forEach { enqueue(it) } }
+
+    private fun enqueue(e: AppEntry) {
+        if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) return
+        installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED)
+        if (!installing) processNext()
+    }
+
+    private fun setStatus(pkg: String, text: String, color: Int) {
+        statusViews[pkg]?.let { it.text = text; it.setTextColor(color) }
+    }
+
+    private fun processNext() {
+        val e = installQueue.removeFirstOrNull()
+        if (e == null) { installing = false; current = null; return }
+        installing = true; current = e
+        setStatus(e.pkg, "Baixando…  0%", MUTED)
         Thread {
             val dl = File(cacheDir, e.pkg + ".dl")
-            val ok = try { download(e.url, dl) } catch (ex: Exception) { false }
-            if (!ok || dl.length() == 0L) { runOnUiThread { toast("Falha ao baixar ${e.name}") }; return@Thread }
+            val ok = try { download(e.url, dl) { pct -> runOnUiThread { setStatus(e.pkg, "Baixando…  $pct%", MUTED) } } } catch (ex: Exception) { false }
+            if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); current = null; processNext() }; return@Thread }
             val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
             runOnUiThread {
+                setStatus(e.pkg, "Instalando…", ACCENT)
                 try {
                     if (splits == null) installSession(listOf(dl))
-                    else if (splits.isEmpty()) toast("Pacote de ${e.name} sem APK dentro")
+                    else if (splits.isEmpty()) { setStatus(e.pkg, "Pacote inválido", RED); current = null; processNext() }
                     else installSession(splits)
-                } catch (ex: Exception) { toast("Falha ao instalar ${e.name}: ${ex.message}") }
+                } catch (ex: Exception) { setStatus(e.pkg, "Falha: ${ex.message}", RED); current = null; processNext() }
             }
         }.start()
     }
 
-    private fun download(urlStr: String, dest: File): Boolean {
+    private fun download(urlStr: String, dest: File, onProgress: (Int) -> Unit): Boolean {
         var url = urlStr; var redirects = 0
         while (redirects < 6) {
             val c = (URL(url).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000 }
             val code = c.responseCode
             if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return false; url = loc; redirects++; continue }
             if (code != 200) { c.disconnect(); return false }
-            try { c.inputStream.use { inp -> dest.outputStream().use { out -> inp.copyTo(out) } }; return true } finally { c.disconnect() }
+            try {
+                val total = c.contentLengthLong
+                c.inputStream.use { inp ->
+                    dest.outputStream().use { out ->
+                        val buf = ByteArray(16 * 1024); var readTotal = 0L; var lastPct = -1
+                        while (true) {
+                            val r = inp.read(buf); if (r < 0) break
+                            out.write(buf, 0, r); readTotal += r
+                            if (total > 0) { val pct = ((readTotal * 100) / total).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct) } }
+                        }
+                    }
+                }
+                return true
+            } finally { c.disconnect() }
         }
         return false
     }
@@ -418,21 +485,23 @@ class MainActivity : Activity() {
                 PackageInstaller.STATUS_SUCCESS -> {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                     if (pkg != null) grantAll(pkg)
-                    toast("Instalado: $pkg — permissões concedidas")
-                    if (dpm.isDeviceOwnerApp(packageName)) checkGateSilent()
+                    val cur = current
+                    if (cur != null) { setStatus(cur.pkg, "Instalado", GREEN); current = null; processNext() }
                 }
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                     val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                     else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_INTENT)
                     confirm?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    val cur = current; if (cur != null) { setStatus(cur.pkg, "Confirme na tela…", MUTED); current = null; processNext() }
                 }
-                else -> i?.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.let { if (it.isNotEmpty()) toast("Erro: $it") }
+                else -> {
+                    val cur = current
+                    if (cur != null) { setStatus(cur.pkg, "Falha na instalação", RED); current = null; processNext() }
+                    else i?.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.let { if (it.isNotEmpty()) toast("Erro: $it") }
+                }
             }
         }
     }
-
-    /** Após instalar, atualiza os cards (sem recarregar o header "Verificando"). */
-    private fun checkGateSilent() { showCatalog() }
 
     private fun grantAll(pkg: String) {
         if (!dpm.isDeviceOwnerApp(packageName)) return
