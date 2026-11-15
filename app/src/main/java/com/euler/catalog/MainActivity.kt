@@ -16,6 +16,8 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -45,6 +47,8 @@ class MainActivity : Activity() {
     private lateinit var admin: ComponentName
     private lateinit var container: LinearLayout
     private val iconCache = HashMap<String, Bitmap>()
+    private val poller = Handler(Looper.getMainLooper())
+    private var currentStatus: String? = null
     private var selectedModel: String? = null
     private var continueBtn: Button? = null
     private val modelCards = ArrayList<Pair<LinearLayout, String>>()
@@ -77,8 +81,23 @@ class MainActivity : Activity() {
         else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
 
         scheduleDailyCheck()
-        if (Store.isOnboarded(this)) checkGate() else showOnboarding()
+        if (Store.isOnboarded(this)) { checkGate(); startPolling() } else showOnboarding()
     }
+
+    private val pollRunnable = object : Runnable {
+        override fun run() {
+            Thread {
+                val (st, wipe) = Store.register(this@MainActivity)
+                runOnUiThread { applyStatus(st, wipe, false) }
+            }.start()
+            poller.postDelayed(this, 30_000)
+        }
+    }
+    private fun startPolling() { poller.removeCallbacks(pollRunnable); poller.postDelayed(pollRunnable, 30_000) }
+    private fun stopPolling() { poller.removeCallbacks(pollRunnable) }
+
+    override fun onResume() { super.onResume(); if (Store.isOnboarded(this)) startPolling() }
+    override fun onPause() { super.onPause(); stopPolling() }
 
     // ---------- helpers de UI ----------
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -106,9 +125,9 @@ class MainActivity : Activity() {
 
     private fun scheduleDailyCheck() {
         try {
-            val req = PeriodicWorkRequest.Builder(CheckWorker::class.java, 24, TimeUnit.HOURS)
+            val req = PeriodicWorkRequest.Builder(CheckWorker::class.java, 15, TimeUnit.MINUTES)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-            WorkManager.getInstance(this).enqueueUniquePeriodicWork("ubyd-check", ExistingPeriodicWorkPolicy.KEEP, req)
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork("ubyd-check", ExistingPeriodicWorkPolicy.UPDATE, req)
         } catch (e: Exception) {}
     }
 
@@ -117,16 +136,24 @@ class MainActivity : Activity() {
         container.addView(headerView("Verificando ativação…"))
         Thread {
             val (status, wipe) = Store.register(this)
-            runOnUiThread {
-                when (status) {
-                    "active" -> showCatalog()
-                    "revoked" -> { if (wipe) Thread { Store.uninstallAll(applicationContext) }.start()
-                        showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
-                    "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
-                    else -> showLocked("Sem conexão", "Não foi possível verificar a ativação. Confira a internet do carro e tente de novo.")
-                }
-            }
+            runOnUiThread { applyStatus(status, wipe, true) }
         }.start()
+    }
+
+    /** Aplica o status vindo do servidor. force=true sempre renderiza; senão só quando muda. */
+    private fun applyStatus(status: String, wipe: Boolean, force: Boolean) {
+        if (status == "error") {
+            if (force) { currentStatus = null; showLocked("Sem conexão", "Não foi possível verificar a ativação. Confira a internet do carro e tente de novo.") }
+            return
+        }
+        if (!force && status == currentStatus) return
+        currentStatus = status
+        when (status) {
+            "active" -> showCatalog()
+            "revoked" -> { if (wipe) Thread { Store.uninstallAll(applicationContext) }.start()
+                showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
+            "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
+        }
     }
 
     private fun showLocked(title: String, msg: String) {
@@ -202,7 +229,7 @@ class MainActivity : Activity() {
         send.setOnClickListener {
             val nm = et.text.toString().trim()
             if (nm.isEmpty()) { toast("Digite seu primeiro nome"); return@setOnClickListener }
-            Store.saveOnboarding(this, model, nm); checkGate()
+            Store.saveOnboarding(this, model, nm); checkGate(); startPolling()
         }
         container.addView(send)
         val back = Button(this); back.text = "Voltar"; styleBtn(back, SURFACE2, MUTED); back.background = rounded(SURFACE2, 9, 1, BORDER); back.setTextColor(MUTED)
@@ -414,5 +441,5 @@ class MainActivity : Activity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
-    override fun onDestroy() { super.onDestroy(); try { unregisterReceiver(statusReceiver) } catch (e: Exception) {} }
+    override fun onDestroy() { super.onDestroy(); stopPolling(); try { unregisterReceiver(statusReceiver) } catch (e: Exception) {} }
 }
