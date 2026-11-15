@@ -34,11 +34,23 @@ object Store {
         return sb.toString()
     }
 
+    // ---- onboarding (modelo + primeiro nome) ----
+    private fun prefs(ctx: Context) = ctx.getSharedPreferences("ubyd", Context.MODE_PRIVATE)
+    fun isOnboarded(ctx: Context): Boolean = !(prefs(ctx).getString("firstname", "") ?: "").isNullOrEmpty()
+    fun saveOnboarding(ctx: Context, model: String, name: String) {
+        prefs(ctx).edit().putString("model", model).putString("firstname", name).apply()
+    }
+    fun displayName(ctx: Context): String {
+        val m = prefs(ctx).getString("model", "") ?: ""
+        val n = prefs(ctx).getString("firstname", "") ?: ""
+        return if (m.isNotEmpty() && n.isNotEmpty()) "$m — $n" else (Build.MODEL ?: "Veículo")
+    }
+
     /** Registra/pinga o servidor. Retorna (status, wipe). status: active | pending | revoked | error */
     fun register(ctx: Context): Pair<String, Boolean> {
         return try {
             val id = carId(ctx)
-            val nome = Build.MODEL?.replace("\"", "") ?: "Veículo"
+            val nome = displayName(ctx).replace("\"", "")
             val body = "{\"id\":\"$id\",\"nome\":\"$nome\"}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return Pair("error", false)
             val o = JSONObject(resp)

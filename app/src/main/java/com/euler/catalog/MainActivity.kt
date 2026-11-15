@@ -19,6 +19,8 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -43,6 +45,16 @@ class MainActivity : Activity() {
     private lateinit var admin: ComponentName
     private lateinit var container: LinearLayout
     private val iconCache = HashMap<String, Bitmap>()
+    private var selectedModel: String? = null
+    private var continueBtn: Button? = null
+    private val modelCards = ArrayList<Pair<LinearLayout, String>>()
+    private val MODELS = listOf(
+        "Dolphin Mini" to true, "Dolphin GS" to true, "Dolphin SE" to true, "Dolphin Plus" to true,
+        "King" to true, "Yuan Pro" to true, "Yuan Plus" to true, "Song Pro" to true, "Song Plus" to true,
+        "Song Premium" to true, "Atto 2" to true, "Atto 8" to true, "Shark" to true, "Seal" to true,
+        "Sealion" to false, "Geely EX2 Pro" to true, "Geely EX2 Max" to true, "Tiggo 7" to true,
+        "Tiggo 8" to true, "Omoda 5" to true, "Omoda E5" to true, "Jaecoo 7" to true
+    )
 
     // paleta
     private val BG = 0xFF0A0C10.toInt(); private val SURFACE = 0xFF141922.toInt()
@@ -64,7 +76,8 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL), Context.RECEIVER_NOT_EXPORTED)
         else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
 
-        scheduleDailyCheck(); checkGate()
+        scheduleDailyCheck()
+        if (Store.isOnboarded(this)) checkGate() else showOnboarding()
     }
 
     // ---------- helpers de UI ----------
@@ -81,7 +94,7 @@ class MainActivity : Activity() {
         val h = LinearLayout(this); h.orientation = LinearLayout.HORIZONTAL; h.gravity = Gravity.CENTER_VERTICAL
         h.setPadding(0, 0, 0, dp(18))
         val logo = ImageView(this); logo.layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
-        logo.background = rounded(ACCENT, 12); logo.setPadding(dp(11), dp(11), dp(11), dp(11)); logo.setImageResource(R.drawable.ic_lock)
+        logo.background = rounded(0xFFFFFFFF.toInt(), 12); logo.setPadding(dp(5), dp(5), dp(5), dp(5)); logo.setImageResource(R.mipmap.ic_launcher)
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(dp(12), 0, 0, 0)
         col.addView(tv("Unlock BYD", 17f, TEXT, true)); col.addView(tv(subtitle, 12f, MUTED))
         h.addView(logo); h.addView(col); return h
@@ -129,6 +142,73 @@ class MainActivity : Activity() {
         val b = Button(this); b.text = "Verificar novamente"; styleBtn(b, ACCENT, 0xFF04201D.toInt()); b.setOnClickListener { checkGate() }
         card.addView(b)
         container.addView(card)
+    }
+
+    // ---------- Onboarding (primeiro uso) ----------
+    private fun showOnboarding() {
+        container.removeAllViews(); modelCards.clear(); selectedModel = null
+        container.addView(headerView("Bem-vindo"))
+        container.addView(tv("Informe o modelo do seu veículo", 17f, TEXT, true).apply { setPadding(0, dp(10), 0, dp(4)) })
+        container.addView(tv("Deslize para o lado e toque no modelo.", 12.5f, MUTED).apply { setPadding(0, 0, 0, dp(14)) })
+
+        val sc = HorizontalScrollView(this); sc.isHorizontalScrollBarEnabled = false
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
+        for ((name, avail) in MODELS) row.addView(modelCard(name, avail))
+        sc.addView(row); container.addView(sc)
+
+        val cont = Button(this); cont.text = "Continuar"; styleBtn(cont, ACCENT, 0xFF04201D.toInt()); cont.isEnabled = false; cont.alpha = 0.45f
+        val clp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); clp.topMargin = dp(22); cont.layoutParams = clp
+        cont.setOnClickListener { selectedModel?.let { showNameStep(it) } }
+        continueBtn = cont; container.addView(cont)
+    }
+
+    private fun modelCard(name: String, avail: Boolean): LinearLayout {
+        val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL; card.gravity = Gravity.CENTER
+        val lp = LinearLayout.LayoutParams(dp(130), dp(90)); lp.rightMargin = dp(10); card.layoutParams = lp
+        card.setPadding(dp(10), dp(10), dp(10), dp(10)); card.background = rounded(SURFACE, 14, 1, BORDER)
+        if (avail) {
+            card.addView(tv(name, 14f, TEXT, true).apply { gravity = Gravity.CENTER })
+            card.setOnClickListener { selectModel(name) }
+            modelCards.add(card to name)
+        } else {
+            card.alpha = 0.45f
+            card.addView(tv(name, 14f, MUTED, true).apply { gravity = Gravity.CENTER })
+            card.addView(tv("Indisponível", 11f, RED).apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) })
+        }
+        return card
+    }
+
+    private fun selectModel(name: String) {
+        selectedModel = name
+        for ((v, n) in modelCards) {
+            v.background = if (n == name) rounded(ACCENT, 14, 2, ACCENT) else rounded(SURFACE, 14, 1, BORDER)
+            (v.getChildAt(0) as? TextView)?.setTextColor(if (n == name) 0xFF04201D.toInt() else TEXT)
+        }
+        continueBtn?.isEnabled = true; continueBtn?.alpha = 1f
+    }
+
+    private fun showNameStep(model: String) {
+        container.removeAllViews()
+        container.addView(headerView("Bem-vindo"))
+        container.addView(tv("Modelo selecionado", 12f, MUTED).apply { setPadding(0, dp(8), 0, dp(2)) })
+        container.addView(tv(model, 16f, ACCENT, true).apply { setPadding(0, 0, 0, dp(18)) })
+        container.addView(tv("Digite o seu primeiro nome", 15f, TEXT, true))
+        val et = EditText(this); et.hint = "Seu primeiro nome"; et.setHintTextColor(MUTED); et.setTextColor(TEXT)
+        et.background = rounded(SURFACE, 10, 1, BORDER); et.setPadding(dp(12), dp(12), dp(12), dp(12)); et.setSingleLine()
+        val elp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); elp.topMargin = dp(8); et.layoutParams = elp
+        container.addView(et)
+        val send = Button(this); send.text = "Enviar solicitação"; styleBtn(send, ACCENT, 0xFF04201D.toInt())
+        val slp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); slp.topMargin = dp(18); send.layoutParams = slp
+        send.setOnClickListener {
+            val nm = et.text.toString().trim()
+            if (nm.isEmpty()) { toast("Digite seu primeiro nome"); return@setOnClickListener }
+            Store.saveOnboarding(this, model, nm); checkGate()
+        }
+        container.addView(send)
+        val back = Button(this); back.text = "Voltar"; styleBtn(back, SURFACE2, MUTED); back.background = rounded(SURFACE2, 9, 1, BORDER); back.setTextColor(MUTED)
+        val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT); blp.topMargin = dp(10); back.layoutParams = blp
+        back.setOnClickListener { showOnboarding() }
+        container.addView(back)
     }
 
     // ---------- Catálogo (ATIVO) ----------
