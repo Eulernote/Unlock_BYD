@@ -437,7 +437,9 @@ class MainActivity : Activity() {
         setStatus(e.pkg, "Baixando…  0%", MUTED)
         Thread {
             val dl = File(cacheDir, e.pkg + ".dl")
-            val ok = try { download(e.url, dl) { pct -> runOnUiThread { setStatus(e.pkg, "Baixando…  $pct%", MUTED) } } } catch (ex: Exception) { false }
+            val ok = try { download(e.url, dl) { pct, bytes -> runOnUiThread {
+                setStatus(e.pkg, if (pct >= 0) "Baixando…  $pct%" else "Baixando…  ${bytes / 1_000_000} MB", MUTED)
+            } } } catch (ex: Exception) { false }
             if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); current = null; processNext() }; return@Thread }
             val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
             if (splits != null) try { dl.delete() } catch (_: Exception) {}  // .dl já extraído, libera espaço
@@ -452,7 +454,7 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun download(urlStr: String, dest: File, onProgress: (Int) -> Unit): Boolean {
+    private fun download(urlStr: String, dest: File, onProgress: (Int, Long) -> Unit): Boolean {
         var url = urlStr; var redirects = 0
         while (redirects < 6) {
             val c = (URL(url).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000 }
@@ -463,16 +465,18 @@ class MainActivity : Activity() {
                 val total = c.contentLengthLong
                 c.inputStream.use { inp ->
                     dest.outputStream().use { out ->
-                        val buf = ByteArray(16 * 1024); var readTotal = 0L; var lastPct = -1
+                        val buf = ByteArray(64 * 1024); var readTotal = 0L; var lastPct = -1; var lastMark = 0L
                         while (true) {
                             val r = inp.read(buf); if (r < 0) break
                             out.write(buf, 0, r); readTotal += r
-                            if (total > 0) { val pct = ((readTotal * 100) / total).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct) } }
+                            if (total > 0) { val pct = ((readTotal * 100) / total).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct, readTotal) } }
+                            else if (readTotal - lastMark >= 1_000_000) { lastMark = readTotal; onProgress(-1, readTotal) }
                         }
+                        out.flush()
                     }
                 }
                 return true
-            } finally { c.disconnect() }
+            } catch (e: Exception) { return false } finally { c.disconnect() }
         }
         return false
     }
