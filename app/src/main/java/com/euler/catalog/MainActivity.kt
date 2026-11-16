@@ -94,7 +94,7 @@ class MainActivity : Activity() {
     private val TEXT = 0xFFE8ECF3.toInt(); private val MUTED = 0xFF8793A6.toInt()
     private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
 
-    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList())
+    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList(), val build: Int = 0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -397,7 +397,7 @@ class MainActivity : Activity() {
             if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty()) {
                 val g = ArrayList<String>()
                 o.optJSONArray("grupos")?.let { for (k in 0 until it.length()) { val v = it.optString(k).trim().lowercase(); if (v.isNotEmpty()) g.add(v) } }
-                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g))
+                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g, o.optInt("build", 0)))
             }
         }
         return out
@@ -565,7 +565,7 @@ class MainActivity : Activity() {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                     if (pkg != null) Thread { grantAll(pkg) }.start()
                     val cur = current
-                    if (cur != null) { markInstalled(cur.pkg); current = null; processNext() }
+                    if (cur != null) { markInstalled(cur.pkg); Store.setBuild(applicationContext, cur.pkg, cur.build); current = null; processNext() }
                 }
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                     val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)

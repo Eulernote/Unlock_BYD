@@ -48,13 +48,30 @@ object Store {
     }
 
     // ---- onboarding (modelo + primeiro nome) ----
-    private fun prefs(ctx: Context) = ctx.getSharedPreferences("ubyd", Context.MODE_PRIVATE)
+    internal fun prefs(ctx: Context) = ctx.getSharedPreferences("ubyd", Context.MODE_PRIVATE)
     fun isOnboarded(ctx: Context): Boolean = !(prefs(ctx).getString("firstname", "") ?: "").isNullOrEmpty()
     fun saveOnboarding(ctx: Context, model: String, name: String, grupo: String, ask: Boolean) {
         prefs(ctx).edit().putString("model", model).putString("firstname", name)
             .putString("grupo", grupo).putBoolean("ask", ask).apply()
     }
     fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").remove("grupo").remove("ask").apply() }
+
+    /** App do catálogo (para auto-atualização): pacote, url e número de build. */
+    data class CatApp(val pkg: String, val url: String, val build: Int)
+    fun catalogApps(): List<CatApp> {
+        val out = ArrayList<CatApp>()
+        try {
+            val arr = JSONObject(httpGet(CATALOG_URL) ?: return out).optJSONArray("apps") ?: return out
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val p = o.optString("package").trim(); val u = o.optString("url").trim()
+                if (p.isNotEmpty() && u.isNotEmpty()) out.add(CatApp(p, u, o.optInt("build", 0)))
+            }
+        } catch (e: Exception) {}
+        return out
+    }
+    fun getBuild(ctx: Context, pkg: String): Int = prefs(ctx).getInt("b_$pkg", 0)
+    fun setBuild(ctx: Context, pkg: String, n: Int) { prefs(ctx).edit().putInt("b_$pkg", n).apply() }
     fun displayName(ctx: Context): String {
         val m = prefs(ctx).getString("model", "") ?: ""
         val n = prefs(ctx).getString("firstname", "") ?: ""
