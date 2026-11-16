@@ -443,13 +443,16 @@ class MainActivity : Activity() {
             if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); current = null; processNext() }; return@Thread }
             val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
             if (splits != null) try { dl.delete() } catch (_: Exception) {}  // .dl já extraído, libera espaço
-            runOnUiThread {
-                setStatus(e.pkg, "Instalando…", ACCENT)
-                try {
-                    if (splits == null) installSession(listOf(dl))
-                    else if (splits.isEmpty()) { setStatus(e.pkg, "Pacote inválido", RED); cleanTemps(); current = null; processNext() }
-                    else installSession(splits)
-                } catch (ex: Exception) { setStatus(e.pkg, "Falha: ${ex.message}", RED); cleanTemps(); current = null; processNext() }
+            runOnUiThread { setStatus(e.pkg, "Instalando…", ACCENT) }
+            // A cópia dos bytes para a sessão roda AQUI, na thread de fundo — não trava a tela.
+            try {
+                when {
+                    splits == null -> installSession(listOf(dl))
+                    splits.isEmpty() -> { runOnUiThread { setStatus(e.pkg, "Pacote inválido", RED); cleanTemps(); current = null; processNext() }; return@Thread }
+                    else -> installSession(splits)
+                }
+            } catch (ex: Exception) {
+                runOnUiThread { setStatus(e.pkg, "Falha: ${ex.message}", RED); cleanTemps(); current = null; processNext() }
             }
         }.start()
     }
@@ -540,7 +543,7 @@ class MainActivity : Activity() {
             when (i?.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
                 PackageInstaller.STATUS_SUCCESS -> {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
-                    if (pkg != null) grantAll(pkg)
+                    if (pkg != null) Thread { grantAll(pkg) }.start()
                     val cur = current
                     if (cur != null) { setStatus(cur.pkg, "Instalado", GREEN); current = null; processNext() }
                 }
