@@ -106,6 +106,7 @@ class MainActivity : Activity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL), Context.RECEIVER_NOT_EXPORTED)
         else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
 
+        cleanTemps()
         scheduleDailyCheck()
         if (Store.isOnboarded(this)) { checkGate(); startPolling() } else showOnboarding()
     }
@@ -439,13 +440,14 @@ class MainActivity : Activity() {
             val ok = try { download(e.url, dl) { pct -> runOnUiThread { setStatus(e.pkg, "Baixando…  $pct%", MUTED) } } } catch (ex: Exception) { false }
             if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); current = null; processNext() }; return@Thread }
             val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
+            if (splits != null) try { dl.delete() } catch (_: Exception) {}  // .dl já extraído, libera espaço
             runOnUiThread {
                 setStatus(e.pkg, "Instalando…", ACCENT)
                 try {
                     if (splits == null) installSession(listOf(dl))
-                    else if (splits.isEmpty()) { setStatus(e.pkg, "Pacote inválido", RED); current = null; processNext() }
+                    else if (splits.isEmpty()) { setStatus(e.pkg, "Pacote inválido", RED); cleanTemps(); current = null; processNext() }
                     else installSession(splits)
-                } catch (ex: Exception) { setStatus(e.pkg, "Falha: ${ex.message}", RED); current = null; processNext() }
+                } catch (ex: Exception) { setStatus(e.pkg, "Falha: ${ex.message}", RED); cleanTemps(); current = null; processNext() }
             }
         }.start()
     }
@@ -505,12 +507,22 @@ class MainActivity : Activity() {
 
     private fun installSession(apks: List<File>) {
         val pi = packageManager.packageInstaller
-        val sessionId = pi.createSession(PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL))
+        val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
+        val total = apks.sumOf { it.length() }
+        if (total > 0) try { params.setSize(total) } catch (_: Exception) {}
+        val sessionId = pi.createSession(params)
         val session = pi.openSession(sessionId); var i = 0
         for (f in apks) { session.openWrite("split_$i.apk", 0, f.length()).use { out -> f.inputStream().use { it.copyTo(out) }; session.fsync(out) }; i++ }
+        // Os bytes já estão na sessão: apaga os temporários agora pra liberar espaço antes da cópia final.
+        for (f in apks) { try { f.delete(); f.parentFile?.let { if (it.name.startsWith("sp_")) it.delete() } } catch (_: Exception) {} }
         val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
         val pending = PendingIntent.getBroadcast(this, sessionId, Intent(ACTION_INSTALL).setPackage(packageName), flags)
         session.commit(pending.intentSender); session.close()
+    }
+
+    /** Apaga downloads (.dl) e extrações (sp_*) acumulados na pasta de cache. */
+    private fun cleanTemps() {
+        try { cacheDir.listFiles()?.forEach { if (it.name.endsWith(".dl") || it.name.startsWith("sp_")) it.deleteRecursively() } } catch (_: Exception) {}
     }
 
     private val statusReceiver = object : BroadcastReceiver() {
@@ -529,9 +541,17 @@ class MainActivity : Activity() {
                     val cur = current; if (cur != null) { setStatus(cur.pkg, "Confirme na tela…", MUTED); current = null; processNext() }
                 }
                 else -> {
+                    val msg = i?.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                     val cur = current
-                    if (cur != null) { setStatus(cur.pkg, "Falha na instalação", RED); current = null; processNext() }
-                    else i?.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)?.let { if (it.isNotEmpty()) toast("Erro: $it") }
+                    if (cur != null) {
+                        val low = (msg ?: "").lowercase()
+                        val txt = when {
+                            low.contains("storage") || low.contains("insufficient") -> "Falha: sem espaço no carro"
+                            msg.isNullOrEmpty() -> "Falha na instalação"
+                            else -> "Falha: ${msg.take(50)}"
+                        }
+                        setStatus(cur.pkg, txt, RED); cleanTemps(); current = null; processNext()
+                    } else if (!msg.isNullOrEmpty()) toast("Erro: $msg")
                 }
             }
         }
