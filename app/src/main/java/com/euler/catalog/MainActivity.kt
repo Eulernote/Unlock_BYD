@@ -296,8 +296,6 @@ class MainActivity : Activity() {
     private fun renderCatalog(entries: List<AppEntry>?) {
         container.removeAllViews(); statusViews.clear(); buttonViews.clear()
         container.addView(headerView("Loja do veículo"))
-        if (!dpm.isDeviceOwnerApp(packageName))
-            container.addView(tv("Atenção: não é Device Owner — rode o dpm set-device-owner.", 12f, RED).apply { setPadding(0, 0, 0, dp(8)) })
         container.addView(selfCard())
         if (entries == null) {
             container.addView(tv("Não consegui carregar a lista. Verifique a internet.", 14f, MUTED).apply { setPadding(0, dp(10), 0, dp(12)) })
@@ -318,24 +316,28 @@ class MainActivity : Activity() {
         for (e in visible) container.addView(appCard(e))
 
         if (dpm.isDeviceOwnerApp(packageName)) {
-            val rm = Button(this); rm.text = "Remover Device Owner"; styleBtn(rm, SURFACE2, MUTED)
+            val rm = Button(this); rm.text = "Aplicativo bloqueado para desinstalação"; styleBtn(rm, SURFACE2, MUTED)
             rm.background = rounded(SURFACE2, 9, 1, BORDER); rm.setTextColor(MUTED)
             val rlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); rlp.topMargin = dp(30); rm.layoutParams = rlp
             rm.setOnClickListener { requestRemoval() }
             container.addView(rm)
-            container.addView(tv("Requer autorização no painel da Unlock BYD.", 11f, MUTED).apply { setPadding(0, dp(6), 0, 0); gravity = Gravity.CENTER })
         }
     }
 
     private fun requestRemoval() {
-        toast("Verificando autorização…")
         Thread {
             val allowed = Store.requestRemoval(this)
             runOnUiThread {
                 if (allowed) {
-                    try { dpm.clearDeviceOwnerApp(packageName); toast("Device Owner removido"); checkGate() }
-                    catch (e: Exception) { toast("Falha ao remover: ${e.message}") }
-                } else toast("Remoção não autorizada. Solicite no painel.")
+                    try { dpm.clearDeviceOwnerApp(packageName); toast("Bloqueio removido. O app já pode ser desinstalado."); checkGate() }
+                    catch (e: Exception) { toast("Não foi possível remover agora: ${e.message}") }
+                } else {
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("Aplicativo bloqueado")
+                        .setMessage("Este aplicativo não pode ser desinstalado da multimídia. Para desinstalá-lo, solicite à Unlock BYD a retirada do bloqueio.")
+                        .setPositiveButton("Entendi", null)
+                        .show()
+                }
             }
         }.start()
     }
