@@ -15,13 +15,8 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
             } else if (r.status == "active") {
                 // Auto-atualização do próprio Unlock BYD (qualquer rede).
                 try { Updater.selfUpdateIfNeeded(ctx) } catch (e: Exception) {}
-                // Outros apps instalados: só no Wi-Fi e 1x por dia (primeira internet do dia).
-                try {
-                    if (Updater.isUnmetered(ctx) && Updater.firstTimeToday(ctx)) {
-                        Updater.updateInstalledApps(ctx)
-                        Updater.markDoneToday(ctx)
-                    }
-                } catch (e: Exception) {}
+                // Outros apps instalados: sempre que estiver no Wi-Fi (a cada checagem ~15 min).
+                try { if (Updater.isUnmetered(ctx)) Updater.updateInstalledApps(ctx) } catch (e: Exception) {}
             }
             Result.success()
         } catch (e: Exception) {
