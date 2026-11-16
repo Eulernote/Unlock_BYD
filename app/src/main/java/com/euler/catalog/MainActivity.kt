@@ -495,7 +495,13 @@ class MainActivity : Activity() {
 
     private fun extractSplits(file: File, pkg: String): List<File>? {
         ZipFile(file).use { zf ->
-            val apkEntries = zf.entries().toList().filter { !it.isDirectory && it.name.endsWith(".apk", true) && !it.name.contains("standalones/") }
+            val entries = zf.entries().toList().filter { !it.isDirectory }
+            // Já é um APK normal (AndroidManifest.xml na raiz)? Instala direto — .apk dentro de assets/ são recursos, não splits.
+            if (entries.any { it.name == "AndroidManifest.xml" }) return null
+            // Pacote (xapk/apks): considera só os .apk do topo do zip; nunca os de dentro de assets/.
+            var apkEntries = entries.filter { it.name.endsWith(".apk", true) && !it.name.contains("/") }
+            if (apkEntries.isEmpty())
+                apkEntries = entries.filter { it.name.endsWith(".apk", true) && !it.name.contains("assets/") && !it.name.contains("standalones/") }
             if (apkEntries.isEmpty()) return null
             val outDir = File(cacheDir, "sp_$pkg").apply { deleteRecursively(); mkdirs() }
             var universal: File? = null; val splits = ArrayList<File>()
