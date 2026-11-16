@@ -53,6 +53,8 @@ class MainActivity : Activity() {
     private var installing = false
     private var current: AppEntry? = null
     private val statusViews = HashMap<String, TextView>()
+    private val buttonViews = HashMap<String, Button>()
+    private lateinit var swipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     private var selfLatestVc = 0
     private var selfUrl = ""
     private var currentPlan = "basico"
@@ -101,7 +103,18 @@ class MainActivity : Activity() {
 
         val scroll = ScrollView(this); scroll.setBackgroundColor(BG)
         container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), dp(22), dp(18), dp(40)) }
-        scroll.addView(container); setContentView(scroll)
+        scroll.addView(container)
+        swipe = androidx.swiperefreshlayout.widget.SwipeRefreshLayout(this)
+        swipe.setColorSchemeColors(ACCENT); swipe.setProgressBackgroundColorSchemeColor(SURFACE)
+        swipe.addView(scroll)
+        swipe.setOnRefreshListener {
+            if (!Store.isOnboarded(this)) { swipe.isRefreshing = false; return@setOnRefreshListener }
+            Thread {
+                val r = Store.register(this)
+                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; swipe.isRefreshing = false; applyStatus(r.status, r.wipe, true) }
+            }.start()
+        }
+        setContentView(swipe)
 
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL), Context.RECEIVER_NOT_EXPORTED)
         else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
@@ -281,7 +294,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderCatalog(entries: List<AppEntry>?) {
-        container.removeAllViews(); statusViews.clear()
+        container.removeAllViews(); statusViews.clear(); buttonViews.clear()
         container.addView(headerView("Loja do veículo"))
         if (!dpm.isDeviceOwnerApp(packageName))
             container.addView(tv("Atenção: não é Device Owner — rode o dpm set-device-owner.", 12f, RED).apply { setPadding(0, 0, 0, dp(8)) })
@@ -348,6 +361,7 @@ class MainActivity : Activity() {
         styleBtn(btn, if (inst) SURFACE2 else ACCENT, if (inst) TEXT else 0xFF04201D.toInt())
         if (inst) btn.background = rounded(SURFACE2, 9, 1, BORDER)
         btn.setOnClickListener { enqueue(e) }
+        buttonViews[e.pkg] = btn
 
         card.addView(icon); card.addView(info); card.addView(btn); return card
     }
@@ -428,6 +442,12 @@ class MainActivity : Activity() {
 
     private fun setStatus(pkg: String, text: String, color: Int) {
         statusViews[pkg]?.let { it.text = text; it.setTextColor(color) }
+    }
+
+    /** Marca como instalado em tempo real: status verde + botão vira "Reinstalar". */
+    private fun markInstalled(pkg: String) {
+        setStatus(pkg, "Instalado", GREEN)
+        buttonViews[pkg]?.let { b -> b.text = "Reinstalar"; styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER) }
     }
 
     private fun processNext() {
@@ -545,7 +565,7 @@ class MainActivity : Activity() {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                     if (pkg != null) Thread { grantAll(pkg) }.start()
                     val cur = current
-                    if (cur != null) { setStatus(cur.pkg, "Instalado", GREEN); current = null; processNext() }
+                    if (cur != null) { markInstalled(cur.pkg); current = null; processNext() }
                 }
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                     val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
