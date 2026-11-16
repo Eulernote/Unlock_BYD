@@ -24,10 +24,12 @@ import java.util.zip.ZipFile
 /** Atualização automática silenciosa (Device Owner), usada pelo CheckWorker. */
 object Updater {
 
-    fun isUnmetered(ctx: Context): Boolean = try {
-        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        !cm.isActiveNetworkMetered
-    } catch (e: Exception) { false }
+    fun isUnmetered(ctx: Context): Boolean {
+        return try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            cm.isActiveNetworkMetered.not()
+        } catch (e: Exception) { false }
+    }
 
     private fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
     fun firstTimeToday(ctx: Context): Boolean = Store.prefs(ctx).getString("lastUpdDay", "") != today()
