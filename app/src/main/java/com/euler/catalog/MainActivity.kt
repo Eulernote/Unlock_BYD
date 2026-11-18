@@ -56,6 +56,8 @@ class MainActivity : Activity() {
     private val buttonViews = HashMap<String, Button>()
     private val uninstallViews = HashMap<String, Button>()
     private val entriesByPkg = HashMap<String, AppEntry>()
+    private val pendingManual = HashMap<String, String>()   // instruções de passo manual (pasta data/obb) a mostrar após instalar
+    private var permWaiting: AppEntry? = null
     private val lockedInstaller = HashSet<String>()   // instalador do Android travado (Lock/original) neste carro
     private val ACTION_UNINSTALL = "com.euler.catalog.UNINSTALL_STATUS"
     private lateinit var swipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
@@ -494,6 +496,11 @@ class MainActivity : Activity() {
 
     private fun enqueue(e: AppEntry) {
         if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) return
+        if (Extras.needsStoragePermission(e.extras) && !hasStorage()) {
+            // Android 10: precisa de acesso ao armazenamento para gravar em Android/obb e Android/data.
+            try { dpm.setPermissionGrantState(admin, packageName, android.Manifest.permission.WRITE_EXTERNAL_STORAGE, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED) } catch (_: Exception) {}
+            if (!hasStorage()) { permWaiting = e; requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE, android.Manifest.permission.READ_EXTERNAL_STORAGE), 77); return }
+        }
         installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED)
         if (!installing) processNext()
     }
@@ -517,14 +524,16 @@ class MainActivity : Activity() {
         Thread {
             // 1) Arquivos extras (ex.: discos) — vão para Download/<pasta>/ antes do APK.
             val steps = e.extras.size + 1
+            val manuals = ArrayList<String>()
             for ((idx, ex) in e.extras.withIndex()) {
-                val tag = "(${idx + 1}/$steps) ${ex.nome}"
-                runOnUiThread { setStatus(e.pkg, "Baixando $tag…", MUTED) }
-                val okx = try { Extras.fetch(applicationContext, ex) { pct, bytes -> runOnUiThread {
-                    setStatus(e.pkg, if (pct >= 0) "Baixando $tag…  $pct%" else "Baixando $tag…  ${bytes / 1_000_000} MB", MUTED)
-                } } } catch (x: Exception) { false }
-                if (!okx) { runOnUiThread { setStatus(e.pkg, "Falha ao baixar ${ex.nome}", RED); current = null; processNext() }; return@Thread }
+                val tag = "(${idx + 1}/$steps)"
+                runOnUiThread { setStatus(e.pkg, "$tag Baixando ${ex.nome}…", MUTED) }
+                val res = try { Extras.fetch(applicationContext, ex, e.pkg) { txt -> runOnUiThread { setStatus(e.pkg, "$tag $txt", MUTED) } } }
+                          catch (x: Exception) { Extras.Result(false) }
+                if (!res.ok) { runOnUiThread { setStatus(e.pkg, "Falha ao baixar ${ex.nome}", RED); current = null; processNext() }; return@Thread }
+                res.manual?.let { if (!manuals.contains(it)) manuals.add(it) }
             }
+            if (manuals.isNotEmpty()) pendingManual[e.pkg] = manuals.joinToString("\n\n— — —\n\n")
             // 2) APK
             val pre = if (steps > 1) "($steps/$steps) " else ""
             val dl = File(cacheDir, e.pkg + ".dl")
@@ -629,6 +638,31 @@ class MainActivity : Activity() {
         try { cacheDir.listFiles()?.forEach { if (it.name.endsWith(".dl") || it.name.startsWith("sp_")) it.deleteRecursively() } } catch (_: Exception) {}
     }
 
+    private fun hasStorage(): Boolean = Build.VERSION.SDK_INT > 29 ||
+        checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 77) return
+        val e = permWaiting ?: return; permWaiting = null
+        // Mesmo se negar, segue: o que não puder ir direto vai para a pasta Download com instruções.
+        installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED)
+        if (!installing) processNext()
+    }
+
+    /** Depois de instalar: mostra como terminar à mão (pasta data/obb que o Android não deixou colocar sozinho). */
+    private fun showManual(e: AppEntry) {
+        val msg = pendingManual.remove(e.pkg) ?: return
+        setStatus(e.pkg, "Instalado · falta mover a pasta (veja o aviso)", ACCENT)
+        try {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("${e.name}: falta um passo")
+                .setMessage(msg)
+                .setPositiveButton("Entendi", null)
+                .show()
+        } catch (_: Exception) {}
+    }
+
     // ---------- desinstalação ----------
     private fun confirmUninstall(e: AppEntry) {
         if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) { toast("Aguarde terminar a instalação"); return }
@@ -693,7 +727,7 @@ class MainActivity : Activity() {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
                     if (pkg != null) Thread { grantAll(pkg) }.start()
                     val cur = current
-                    if (cur != null) { markInstalled(cur.pkg); Store.setBuild(applicationContext, cur.pkg, cur.build); current = null; processNext() }
+                    if (cur != null) { markInstalled(cur.pkg); Store.setBuild(applicationContext, cur.pkg, cur.build); showManual(cur); current = null; processNext() }
                 }
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                     val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)

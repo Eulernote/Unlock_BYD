@@ -772,12 +772,13 @@ function catEdit(i){catEditIdx=i;var a=i>=0?CAT.apps[i]:{name:'',package:'',url:
   +'<div><label>Grupos (quais carros veem)</label><div style="padding-top:6px">'+GRUPOS.map(function(g){return '<span class="chk"><input type="checkbox" class="cf-g" value="'+g[0]+'"'+(gr.indexOf(g[0])>=0?' checked':'')+'>'+g[1]+'</span>';}).join('')+'</div></div></div>';
  h+='<label>Ícone (PNG)</label><div class="box" style="display:flex;gap:12px;align-items:center">'+(a.icon?'<img class="cicon" src="'+esc(a.icon)+'" alt="">':'<div class="cicon"></div>')
   +'<input type="file" id="cf-icon" accept="image/png,image/jpeg,image/webp" style="font-size:12.5px;color:var(--muted)"></div>';
- h+='<label>Arquivos extras (discos etc. — vão para a pasta Download do carro)</label><div class="box">';
- if(ex.length){h+=ex.map(function(x,k){return '<div class="frow"><div class="fk">'+esc(x.nome)+' <span style="color:var(--faint)">→ Download/'+esc(x.pasta||'')+'</span></div><span class="chk" style="margin:0"><input type="checkbox" class="cf-exdel" value="'+k+'">remover</span></div>';}).join('');}
+ h+='<label>Arquivos extras (discos, OBB, data)</label><div class="box">';
+ if(ex.length){h+=ex.map(function(x,k){var d=(x.destino||'download');var where=d==='obb'?'Android/obb':d==='data'?'Android/data':('Download/'+esc(x.pasta||''));return '<div class="frow"><div class="fk">'+esc(x.nome)+' <span style="color:var(--faint)">→ '+where+'</span></div><span class="chk" style="margin:0"><input type="checkbox" class="cf-exdel" value="'+k+'">remover</span></div>';}).join('');}
  else h+='<div class="hint" style="margin:0 0 6px">Nenhum.</div>';
  h+='<div style="margin-top:8px"><input type="file" id="cf-extras" multiple style="font-size:12.5px;color:var(--muted)"></div>'
-  +'<input type="text" id="cf-pasta" placeholder="Pasta dentro de Download (ex.: Resident Evil 4)" value="'+esc((ex[0]&&ex[0].pasta)||a.name||'')+'" style="margin-top:8px">'
-  +'<div class="hint">Os novos arquivos são baixados no carro antes do APK, para Download/&lt;pasta&gt;/.</div></div>';
+  +'<div class="row2" style="margin-top:8px"><div><select id="cf-dest"><option value="download">Destino: pasta Download (discos etc.)</option><option value="obb">Destino: OBB (Android/obb/pacote)</option><option value="data">Destino: Data (Android/data/pacote) — .zip</option></select></div>'
+  +'<div><input type="text" id="cf-pasta" placeholder="Pasta dentro de Download (ex.: Resident Evil 4)" value="'+esc((ex[0]&&ex[0].pasta)||a.name||'')+'"></div></div>'
+  +'<div class="hint">Baixados no carro antes do APK. <b>OBB</b>: o arquivo .obb (ou .zip). <b>Data</b>: a pasta do jogo compactada em .zip. Android 10 coloca direto na pasta certa; nos outros, quando o Android não deixa, vai para Download/&lt;pasta&gt;/&lt;pacote&gt; e o carro mostra como mover. Para enviar extras de destinos diferentes, salve um destino de cada vez.</div></div>';
  h+='<label>Tutorial (aparece ao tocar no nome do app)</label><textarea id="cf-tut" placeholder="Opcional — para jogos com instalação mais complexa">'+esc(a.tutorial||'')+'</textarea>';
  h+='<div style="display:flex;gap:8px;margin-top:16px"><button class="btn btn-approve" id="cf-save" style="flex:1" onclick="catSubmit()">Salvar na loja</button><button class="btn" style="background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="catList()">Cancelar</button></div></div>';
  document.getElementById('cat-body').innerHTML=h;
@@ -800,7 +801,9 @@ function catSubmit(){if(catSaving)return;
  if(!pkg||!/^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$/.test(pkg)){toast('Pacote inválido (ex.: com.empresa.app)');return;}
  if(!orig&&!apk){toast('Escolha o APK do app');return;}
  if(!grupos.length){toast('Marque pelo menos um grupo');return;}
+ var dest=document.getElementById('cf-dest').value;
  if(exFiles.length&&!pasta){toast('Digite a pasta dos extras dentro de Download');return;}
+ if(dest==='data'&&exFiles.some(function(f){return !/\\.zip$/i.test(f.name);})){toast('Para Data, envie a pasta do jogo compactada em .zip');return;}
  if(!orig&&CAT.apps.some(function(a){return a.package===pkg;})){toast('Esse pacote já está na loja — use Editar');return;}
  var entry=JSON.parse(JSON.stringify(orig||{}));
  entry.name=name;entry.package=pkg;entry.desc=document.getElementById('cf-desc').value.trim();entry.plano=document.getElementById('cf-plano').value;entry.grupos=grupos;
@@ -810,7 +813,7 @@ function catSubmit(){if(catSaving)return;
  var jobs=[];
  if(apk)jobs.push({file:apk,key:'apps/'+apk.name,set:function(u){entry.url=u;entry.build=(orig?(parseInt(orig.build)||0)+1:1);}});
  if(icon){var ext=(icon.name.split('.').pop()||'png').toLowerCase();jobs.push({file:icon,key:'icons/'+pkg+'.'+ext,set:function(u){entry.icon=u+'?v='+Date.now();}});}
- exFiles.forEach(function(f){jobs.push({file:f,key:'extras/'+pkg+'/'+f.name,set:function(u){extras=extras.filter(function(x){return !(x.nome===f.name&&(x.pasta||'')===pasta);});extras.push({url:u,pasta:pasta,nome:f.name});}});});
+ exFiles.forEach(function(f){jobs.push({file:f,key:'extras/'+pkg+'/'+f.name,set:function(u){extras=extras.filter(function(x){return !(x.nome===f.name&&(x.destino||'download')===dest);});var it={url:u,pasta:pasta,nome:f.name};if(dest!=='download')it.destino=dest;extras.push(it);}});});
  catSaving=true;document.getElementById('cf-save').disabled=true;upTarget='cat';upBar(0);
  var k=0;function nextJob(){if(k>=jobs.length)return Promise.resolve();var j=jobs[k++];
   return uploadOne(j.file,j.key,k,jobs.length).then(function(){j.set(keyUrl(j.key));return nextJob();});}
