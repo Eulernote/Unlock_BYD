@@ -729,7 +729,7 @@ function startUpload(){if(uploading)return;var inp=document.getElementById('up-f
  .then(function(){uploading=false;document.getElementById('up-go').disabled=false;upBar(null);loadFiles();});}
 window.addEventListener('beforeunload',function(e){if(uploading){e.preventDefault();e.returnValue='';}});
 /* ---------- aba Loja (catálogo) ---------- */
-var CAT=null,CAT_ETAG=null,catEditIdx=-1,catSaving=false;
+var CAT=null,CAT_ETAG=null,catEditIdx=-1,catSaving=false,catAutoIcon=null;
 var GRUPOS=[['byd_simples','BYD Simples'],['byd_google','BYD Google'],['chery','Chery'],['geely','Geely']];
 var PLANOS=[['basico','Básico'],['intermediario','Intermediário'],['premium','Premium']];
 function catMsg(t){document.getElementById('cat-msg').textContent=t||'';}
@@ -758,7 +758,7 @@ function catMove(i,d){var j=i+d;var a=CAT.apps;if(j<0||j>=a.length)return;var t=
  catSave().then(function(){toast('Ordem salva');}).catch(function(e){toast('Falhou: '+e.message);catLoad();});}
 function catDel(i){var a=CAT.apps[i];if(!confirm('Tirar "'+a.name+'" da loja?\\n\\nOs carros que já instalaram continuam com ele. Os arquivos continuam na aba Arquivos.'))return;
  CAT.apps.splice(i,1);catSave().then(function(){toast('Removido da loja');catRows();}).catch(function(e){toast('Falhou: '+e.message);catLoad();});}
-function catEdit(i){catEditIdx=i;var a=i>=0?CAT.apps[i]:{name:'',package:'',url:'',icon:'',desc:'',plano:'basico',grupos:['byd_simples','byd_google','chery','geely'],build:1,extras:[],tutorial:''};
+function catEdit(i){catEditIdx=i;catAutoIcon=null;var a=i>=0?CAT.apps[i]:{name:'',package:'',url:'',icon:'',desc:'',plano:'basico',grupos:['byd_simples','byd_google','chery','geely'],build:1,extras:[],tutorial:''};
  document.getElementById('cat-title').textContent=i>=0?('Editar: '+a.name):'Novo app';catMsg('');
  var gr=a.grupos||[];var ex=a.extras||[];
  var h='<div class="cf">';
@@ -770,8 +770,10 @@ function catEdit(i){catEditIdx=i;var a=i>=0?CAT.apps[i]:{name:'',package:'',url:
  h+='<label>Descrição</label><input type="text" id="cf-desc" value="'+esc(a.desc||'')+'">';
  h+='<div class="row2"><div><label>Plano</label><select id="cf-plano">'+PLANOS.map(function(p){return '<option value="'+p[0]+'"'+((a.plano||'basico')===p[0]?' selected':'')+'>'+p[1]+'</option>';}).join('')+'</select></div>'
   +'<div><label>Grupos (quais carros veem)</label><div style="padding-top:6px">'+GRUPOS.map(function(g){return '<span class="chk"><input type="checkbox" class="cf-g" value="'+g[0]+'"'+(gr.indexOf(g[0])>=0?' checked':'')+'>'+g[1]+'</span>';}).join('')+'</div></div></div>';
- h+='<label>Ícone (PNG)</label><div class="box" style="display:flex;gap:12px;align-items:center">'+(a.icon?'<img class="cicon" src="'+esc(a.icon)+'" alt="">':'<div class="cicon"></div>')
-  +'<input type="file" id="cf-icon" accept="image/png,image/jpeg,image/webp" style="font-size:12.5px;color:var(--muted)"></div>';
+ h+='<label>Ícone</label><div class="box" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">'+(a.icon?'<img class="cicon" id="cf-icon-prev" src="'+esc(a.icon)+'" alt="">':'<img class="cicon" id="cf-icon-prev" alt="" style="display:none"><div class="cicon" id="cf-icon-none"></div>')
+  +'<div style="flex:1;min-width:180px"><div class="hint" id="cf-icon-info" style="margin:0">'+(a.icon?'Ícone atual. ':'')+'O ícone é tirado do próprio APK ao escolher o arquivo.</div>'
+  +'<a href="#" id="cf-icon-link" style="font-size:12px;color:var(--accent)" onclick="document.getElementById(\\'cf-icon\\').style.display=\\'block\\';this.style.display=\\'none\\';return false;">usar outro ícone</a>'
+  +'<input type="file" id="cf-icon" accept="image/png,image/jpeg,image/webp" style="display:none;font-size:12.5px;color:var(--muted);margin-top:6px"></div></div>';
  h+='<label>Arquivos extras (discos, OBB, data)</label><div class="box">';
  if(ex.length){h+=ex.map(function(x,k){var d=(x.destino||'download');var where=d==='obb'?'Android/obb':d==='data'?'Android/data':('Download/'+esc(x.pasta||''));return '<div class="frow"><div class="fk">'+esc(x.nome)+' <span style="color:var(--faint)">→ '+where+'</span></div><span class="chk" style="margin:0"><input type="checkbox" class="cf-exdel" value="'+k+'">remover</span></div>';}).join('');}
  else h+='<div class="hint" style="margin:0 0 6px">Nenhum.</div>';
@@ -789,12 +791,19 @@ function catPickApk(){var f=document.getElementById('cf-apk').files[0];var info=
   if(!m||!m.pkg){info.textContent='Não consegui ler o pacote deste arquivo — digite o pacote manualmente.';return;}
   var pk=document.getElementById('cf-pkg');
   if(catEditIdx>=0&&pk.value&&pk.value!==m.pkg){info.innerHTML='<span style="color:var(--red)">Atenção: este arquivo é do pacote <b>'+esc(m.pkg)+'</b>, mas o app é <b>'+esc(pk.value)+'</b>.</span>';return;}
-  pk.value=m.pkg;var nm=document.getElementById('cf-name');if(!nm.value&&m.label){nm.value=m.label;nm.dispatchEvent(new Event('input'));}
-  info.textContent='Pacote '+m.pkg+(m.ver?(' · versão '+m.ver):'')+' · '+fmtSize(f.size);}).catch(function(){info.textContent='Não consegui ler o pacote — digite manualmente.';});}
+  pk.value=m.pkg;var nm=document.getElementById('cf-name');if(!nm.value&&m.label&&m.label.charAt(0)!=='@'){nm.value=m.label;nm.dispatchEvent(new Event('input'));}
+  info.textContent='Pacote '+m.pkg+(m.ver?(' · versão '+m.ver):'')+' · '+fmtSize(f.size);
+  var ii=document.getElementById('cf-icon-info'),pv=document.getElementById('cf-icon-prev'),none=document.getElementById('cf-icon-none');
+  function showIcon(fileObj,txt){catAutoIcon=fileObj;pv.src=URL.createObjectURL(fileObj);pv.style.display='';if(none)none.style.display='none';ii.textContent=txt;}
+  if(m.icon&&m.icon.svg){svgToPng(m.icon.svg).then(function(b){showIcon(new File([b],'icon.png',{type:'image/png'}),'Ícone desenhado a partir do APK (ícone vetorial). Confira se ficou certo; se não, use "usar outro ícone".');})
+   .catch(function(){catAutoIcon=null;ii.textContent='Não consegui desenhar o ícone deste APK — use "usar outro ícone".';document.getElementById('cf-icon').style.display='block';document.getElementById('cf-icon-link').style.display='none';});}
+  else if(m.icon&&m.icon.bytes){var mime=m.icon.ext==='webp'?'image/webp':(m.icon.ext==='jpg'?'image/jpeg':'image/png');showIcon(new File([m.icon.bytes],'icon.'+(m.icon.ext||'png'),{type:mime}),'Ícone tirado do APK. Será salvo junto.');}
+  else{catAutoIcon=null;ii.textContent='Não achei o ícone dentro deste APK — use "usar outro ícone".';document.getElementById('cf-icon').style.display='block';document.getElementById('cf-icon-link').style.display='none';}
+ }).catch(function(){info.textContent='Não consegui ler o pacote — digite manualmente.';});}
 function catSubmit(){if(catSaving)return;
  var orig=catEditIdx>=0?CAT.apps[catEditIdx]:null;
  var name=document.getElementById('cf-name').value.trim();var pkg=document.getElementById('cf-pkg').value.trim();
- var apk=document.getElementById('cf-apk').files[0];var icon=document.getElementById('cf-icon').files[0];
+ var apk=document.getElementById('cf-apk').files[0];var icon=document.getElementById('cf-icon').files[0]||catAutoIcon;
  var exFiles=Array.prototype.slice.call(document.getElementById('cf-extras').files||[]);var pasta=document.getElementById('cf-pasta').value.trim().replace(/^\\/+|\\/+$/g,'');
  var grupos=Array.prototype.slice.call(document.querySelectorAll('.cf-g')).filter(function(c){return c.checked;}).map(function(c){return c.value;});
  if(!name){toast('Digite o nome do app');return;}
@@ -825,43 +834,141 @@ function catSubmit(){if(catSaving)return;
  .then(function(){toast('✓ '+name+' salvo na loja');catMsg('✓ Salvo. Os carros já veem a mudança ao atualizar a loja.');catList();})
  .catch(function(e){catMsg('✕ '+(e&&e.message?e.message:e));if(orig)CAT.apps[catEditIdx]=orig;})
  .then(function(){catSaving=false;upTarget='up';var b=document.getElementById('cf-save');if(b)b.disabled=false;upBar(null);upTarget='cat';upBar(null);upTarget='up';});}
-/* leitura do pacote de um APK/XAPK direto no navegador (sem enviar nada) */
+/* leitura do APK/XAPK direto no navegador (sem enviar nada): pacote, nome, versão e ícone */
 function u16(dv,o){return dv.getUint16(o,true);}function u32(dv,o){return dv.getUint32(o,true);}
 function u64(dv,o){return dv.getUint32(o,true)+dv.getUint32(o+4,true)*4294967296;}
-function zipEntry(file,want){var tailLen=Math.min(file.size,65557);
+function zipIndex(file){var tailLen=Math.min(file.size,65557);
  return file.slice(file.size-tailLen).arrayBuffer().then(function(tb){var dv=new DataView(tb);var e=-1;
   for(var i=tb.byteLength-22;i>=0;i--){if(u32(dv,i)===0x06054b50){e=i;break;}}if(e<0)throw new Error('zip');
-  var cdSize=u32(dv,e+12),cdOff=u32(dv,e+16);var pre;
+  var cdSize=u32(dv,e+12),cdOff=u32(dv,e+16);
   if(cdOff===0xffffffff||cdSize===0xffffffff){var loc=e-20;if(loc<0||u32(dv,loc)!==0x07064b50)throw new Error('zip64');var z64=u64(dv,loc+8);
-   pre=file.slice(z64,z64+56).arrayBuffer().then(function(b){var d=new DataView(b);return [u64(d,40),u64(d,48)];});}
-  else pre=Promise.resolve([cdSize,cdOff]);
-  return pre;}).then(function(cd){return file.slice(cd[1],cd[1]+cd[0]).arrayBuffer();}).then(function(cb){var dv=new DataView(cb);var o=0;var dec=new TextDecoder();
+   return file.slice(z64,z64+56).arrayBuffer().then(function(b){var d=new DataView(b);return [u64(d,40),u64(d,48)];});}
+  return [cdSize,cdOff];}).then(function(cd){return file.slice(cd[1],cd[1]+cd[0]).arrayBuffer();}).then(function(cb){var dv=new DataView(cb);var o=0;var dec=new TextDecoder();var idx={};
   while(o+46<=cb.byteLength&&u32(dv,o)===0x02014b50){var method=u16(dv,o+10),comp=u32(dv,o+20),unc=u32(dv,o+24),nl=u16(dv,o+28),el=u16(dv,o+30),cl=u16(dv,o+32),lo=u32(dv,o+42);
-   var name=dec.decode(new Uint8Array(cb,o+46,nl));
-   if(name===want){var x=o+46+nl,xe=x+el;while(x+4<=xe){var id=u16(dv,x),sz=u16(dv,x+2),q=x+4;if(id===1){if(unc===0xffffffff){unc=u64(dv,q);q+=8;}if(comp===0xffffffff){comp=u64(dv,q);q+=8;}if(lo===0xffffffff){lo=u64(dv,q);}}x+=4+sz;}
-    return {method:method,comp:comp,lo:lo};}
-   o+=46+nl+el+cl;}return null;}).then(function(en){if(!en)return null;
-  return file.slice(en.lo,en.lo+30).arrayBuffer().then(function(lb){var d=new DataView(lb);var start=en.lo+30+u16(d,26)+u16(d,28);var blob=file.slice(start,start+en.comp);
-   if(en.method===0)return blob.arrayBuffer();
-   if(en.method===8&&typeof DecompressionStream!=='undefined')return new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
-   return null;});});}
-function axmlInfo(buf){var dv=new DataView(buf);if(u16(dv,0)!==3)return null;var o=u16(dv,2);var strs=[];var end=Math.min(u32(dv,4),buf.byteLength);var res={};
+   var name=dec.decode(new Uint8Array(cb,o+46,nl));var x=o+46+nl,xe=x+el;
+   while(x+4<=xe){var id=u16(dv,x),sz=u16(dv,x+2),q=x+4;if(id===1){if(unc===0xffffffff){unc=u64(dv,q);q+=8;}if(comp===0xffffffff){comp=u64(dv,q);q+=8;}if(lo===0xffffffff){lo=u64(dv,q);}}x+=4+sz;}
+   idx[name]={method:method,comp:comp,lo:lo};o+=46+nl+el+cl;}
+  return idx;});}
+function zipRead(file,en){if(!en)return Promise.resolve(null);
+ return file.slice(en.lo,en.lo+30).arrayBuffer().then(function(lb){var d=new DataView(lb);var start=en.lo+30+u16(d,26)+u16(d,28);var blob=file.slice(start,start+en.comp);
+  if(en.method===0)return blob.arrayBuffer();
+  if(en.method===8&&typeof DecompressionStream!=='undefined')return new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+  return null;});}
+function strPool(dv,buf,o){var hs=u16(dv,o+2),cnt=u32(dv,o+8),flags=u32(dv,o+16),sStart=u32(dv,o+20);var utf8=(flags&0x100)!==0;var out=[];var dec=new TextDecoder();
+ for(var i=0;i<cnt;i++){var so=o+sStart+u32(dv,o+hs+i*4);try{
+  if(utf8){var a=dv.getUint8(so);so+=(a&0x80)?2:1;var bl=dv.getUint8(so);if(bl&0x80){bl=((bl&0x7f)<<8)|dv.getUint8(so+1);so+=2;}else so+=1;out.push(dec.decode(new Uint8Array(buf,so,bl)));}
+  else{var l=u16(dv,so);so+=2;if(l&0x8000){l=((l&0x7fff)<<16)|u16(dv,so);so+=2;}var t='';for(var c=0;c<l;c++)t+=String.fromCharCode(u16(dv,so+c*2));out.push(t);}
+ }catch(e){out.push('');}}return out;}
+/* XML binário do Android -> lista de elementos {name, attrs:{nome:{raw,type,data}}} */
+function axmlParse(buf){var dv=new DataView(buf);if(buf.byteLength<8||u16(dv,0)!==3)return null;var o=u16(dv,2);var strs=[];var end=Math.min(u32(dv,4),buf.byteLength);var els=[];
  function str(i){return (i>=0&&i<strs.length)?strs[i]:null;}
  while(o+8<=end){var type=u16(dv,o),hs=u16(dv,o+2),size=u32(dv,o+4);if(!size)break;
-  if(type===1){var cnt=u32(dv,o+8),flags=u32(dv,o+16),sStart=u32(dv,o+20);var utf8=(flags&0x100)!==0;
-   for(var i=0;i<cnt;i++){var so=o+sStart+u32(dv,o+hs+i*4);try{
-    if(utf8){var a=dv.getUint8(so);so+=(a&0x80)?2:1;var bl=dv.getUint8(so);if(bl&0x80){bl=((bl&0x7f)<<8)|dv.getUint8(so+1);so+=2;}else so+=1;strs.push(new TextDecoder().decode(new Uint8Array(buf,so,bl)));}
-    else{var l=u16(dv,so);so+=2;if(l&0x8000){l=((l&0x7fff)<<16)|u16(dv,so);so+=2;}var t='';for(var c=0;c<l;c++)t+=String.fromCharCode(u16(dv,so+c*2));strs.push(t);}
-   }catch(e){strs.push('');}}}
-  else if(type===0x0102){var ext=o+hs;var en=str(u32(dv,ext+4));if(en==='manifest'){var as=u16(dv,ext+8),az=u16(dv,ext+10),ac=u16(dv,ext+12);
-    for(var k=0;k<ac;k++){var ao=ext+as+k*az;var an=str(u32(dv,ao+4)),raw=u32(dv,ao+8),dt=dv.getUint8(ao+15),data=u32(dv,ao+16);
-     if(an==='package')res.pkg=str(raw);else if(an==='versionName')res.ver=raw!==0xffffffff?str(raw):'';else if(an==='versionCode'&&dt>=16)res.code=data;}
-    return res;}}
-  o+=size;}return res.pkg?res:null;}
+  if(type===1)strs=strPool(dv,buf,o);
+  else if(type===0x0102){var ext=o+hs;var el={name:str(u32(dv,ext+4)),attrs:{}};var as=u16(dv,ext+8),az=u16(dv,ext+10),ac=u16(dv,ext+12);
+   for(var k=0;k<ac;k++){var ao=ext+as+k*az;var an=str(u32(dv,ao+4)),raw=u32(dv,ao+8);el.attrs[an]={raw:raw!==0xffffffff?str(raw):null,type:dv.getUint8(ao+15),data:u32(dv,ao+16)};}
+   els.push(el);}
+  else if(type===0x0103){els.push({end:true,name:str(u32(dv,o+hs+4))});}
+  o+=size;}return els;}
+function axmlInfo(buf){var els=axmlParse(buf);if(!els)return null;var res={};
+ els.forEach(function(el){if(el.end)return;var A=el.attrs;
+  if(el.name==='manifest'){if(A.package)res.pkg=A.package.raw;if(A.versionName)res.ver=A.versionName.raw||'';if(A.versionCode&&A.versionCode.type>=16)res.code=A.versionCode.data;}
+  if(el.name==='application'){if(A.icon&&A.icon.type===1)res.icon=A.icon.data;if(A.roundIcon&&A.roundIcon.type===1)res.roundIcon=A.roundIcon.data;
+   if(A.label){if(A.label.type===3)res.label=A.label.raw;else if(A.label.type===1)res.labelRef=A.label.data;}}});
+ return res.pkg?res:null;}
+/* resources.arsc -> {id: [{density, type, value}]} (só o que precisamos: textos e caminhos de arquivo) */
+function arscParse(buf){var dv=new DataView(buf);if(u16(dv,0)!==2)return null;var o=u16(dv,2);var gstr=[];var map={};
+ while(o+8<=buf.byteLength){var type=u16(dv,o),hs=u16(dv,o+2),size=u32(dv,o+4);if(!size)break;
+  if(type===1)gstr=strPool(dv,buf,o);
+  else if(type===0x0200){var pid=u32(dv,o+8);var po=o+hs,pend=o+size;
+   while(po+8<=pend){var t=u16(dv,po),th=u16(dv,po+2),ts=u32(dv,po+4);if(!ts)break;
+    if(t===0x0201){var tid=dv.getUint8(po+8),flags=dv.getUint8(po+9),cnt=u32(dv,po+12),est=u32(dv,po+16);var dens=u16(dv,po+20+14);
+     for(var i=0;i<cnt;i++){var eoff,eidx=i;
+      if(flags&1){if(i*4+4>th+cnt*4)break;eidx=u16(dv,po+th+i*4);eoff=u16(dv,po+th+i*4+2)*4;}else{eoff=u32(dv,po+th+i*4);if(eoff===0xffffffff)continue;}
+      var eo=po+est+eoff;if(eo+16>po+ts)continue;var ef=u16(dv,eo+2);if(ef&1)continue;
+      var vt=dv.getUint8(eo+8+3),vd=u32(dv,eo+8+4);var rid=((pid&0xff)<<24)|(tid<<16)|eidx;rid=rid>>>0;
+      (map[rid]=map[rid]||[]).push({density:dens,type:vt,value:vt===3?gstr[vd]:vd});}}
+    po+=ts;}}
+  o+=size;}return map;}
+function bestFile(map,rid,depth){var list=(map&&map[rid])||[];depth=depth||0;
+ var files=list.filter(function(v){return v.type===3&&v.value;});
+ var imgs=files.filter(function(v){return /\\.(png|webp|jpg)$/i.test(v.value);});
+ function dv(d){return d===0xfffe||d===0xffff?0:d;}
+ if(imgs.length){imgs.sort(function(a,b){return dv(b.density)-dv(a.density);});return {path:imgs[0].value};}
+ var refs=list.filter(function(v){return v.type===1;});if(refs.length&&depth<3)return bestFile(map,refs[0].value,depth+1);
+ var xml=files.filter(function(v){return /\\.xml$/i.test(v.value);});if(xml.length)return {xml:xml[0].value};
+ return null;}
+/* ---- ícones vetoriais (XML) -> SVG ---- */
+function flt(at,def){if(!at)return def;if(at.type===4){var b=new DataView(new ArrayBuffer(4));b.setUint32(0,at.data);return b.getFloat32(0);}
+ if(at.type===16||at.type===17)return at.data|0;if(at.type===5||at.type===6){return (at.data>>>8)*Math.pow(2,-[0,7,15,23][(at.data>>4)&3]);}if(at.raw!=null){var v=parseFloat(at.raw);return isNaN(v)?def:v;}return def;}
+function colorOf(at,map){if(!at)return null;var t=at.type,d=at.data;
+ if(t===1||t===2){var l=(map[d]||[]).filter(function(x){return x.type>=0x1c&&x.type<=0x1f;});if(!l.length)return null;d=l[0].value;t=l[0].type;}
+ if(t>=0x1c&&t<=0x1f){var a=(t===0x1d||t===0x1f)?255:((d>>>24)&255);return 'rgba('+((d>>>16)&255)+','+((d>>>8)&255)+','+(d&255)+','+(a/255).toFixed(3)+')';}
+ if(at.raw&&at.raw.charAt(0)==='#'){return at.raw;}return null;}
+function escA(v){return String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');}
+function vectorSvg(els,map){var root=null,out='',depth=0;
+ els.forEach(function(el){if(el.end){if(el.name==='group')out+='</g>';return;}var A=el.attrs;
+  if(el.name==='vector'){root={w:flt(A.viewportWidth,24),h:flt(A.viewportHeight,24)};}
+  else if(el.name==='group'){var px=flt(A.pivotX,0),py=flt(A.pivotY,0);
+   out+='<g transform="translate('+flt(A.translateX,0)+' '+flt(A.translateY,0)+') translate('+px+' '+py+') rotate('+flt(A.rotation,0)+') scale('+flt(A.scaleX,1)+' '+flt(A.scaleY,1)+') translate('+(-px)+' '+(-py)+')">';}
+  else if(el.name==='path'&&A.pathData&&A.pathData.raw){var f=colorOf(A.fillColor,map),st=colorOf(A.strokeColor,map);
+   out+='<path d="'+escA(A.pathData.raw)+'" fill="'+(f||'none')+'"'+(A.fillAlpha?' fill-opacity="'+flt(A.fillAlpha,1)+'"':'')+(A.fillType&&A.fillType.data===1?' fill-rule="evenodd"':'')
+    +(st?' stroke="'+st+'" stroke-width="'+flt(A.strokeWidth,1)+'"'+(A.strokeAlpha?' stroke-opacity="'+flt(A.strokeAlpha,1)+'"':''):'')+'/>';}});
+ return root?{w:root.w,h:root.h,body:out}:null;}
+/* devolve {w,h,body} desenhando um drawable XML (vector, adaptive-icon, inset) ou PNG */
+function drawableSvg(file,idx,map,rid,depth){depth=depth||0;if(depth>4)return Promise.resolve(null);
+ var col=colorOf({type:1,data:rid},map);if(col)return Promise.resolve({w:108,h:108,body:'<rect width="108" height="108" fill="'+col+'"/>'});
+ var f=bestFile(map,rid);if(!f)return Promise.resolve(null);
+ if(f.path)return zipRead(file,idx[f.path]).then(function(b){if(!b)return null;var bin='';var u=new Uint8Array(b);for(var i=0;i<u.length;i+=8192)bin+=String.fromCharCode.apply(null,u.subarray(i,i+8192));
+  var mime=/\.webp$/i.test(f.path)?'image/webp':'image/png';return {w:108,h:108,body:'<image href="data:'+mime+';base64,'+btoa(bin)+'" width="108" height="108"/>',png:b,ext:f.path.split('.').pop().toLowerCase()};});
+ return zipRead(file,idx[f.xml]).then(function(b){var els=b?axmlParse(b):null;if(!els||!els.length)return null;var first=els[0],A=first.attrs;
+  if(first.name==='vector')return vectorSvg(els,map);
+  if(first.name==='bitmap'&&A.src&&A.src.type===1)return drawableSvg(file,idx,map,A.src.data,depth+1);
+  if(first.name==='inset'){
+   var insA=A.insetLeft||A.inset;var ins=flt(insA,0);var k=insA&&insA.type===5?ins/108:ins;if(!(k>0&&k<0.5))k=0;
+   var child=(A.drawable&&A.drawable.type===1)?drawableSvg(file,idx,map,A.drawable.data,depth+1)
+     :Promise.resolve(els.length>1&&els[1].name==='vector'?vectorSvg(els.slice(1),map):null);
+   return child.then(function(d){if(!d)return null;
+    return {w:d.w,h:d.h,body:'<g transform="translate('+(d.w*k)+' '+(d.h*k)+') scale('+(1-2*k)+')">'+d.body+'</g>'};});}
+  if(first.name==='adaptive-icon'){var bg=null,fg=null;els.forEach(function(e){if(e.end)return;if(e.name==='background'&&e.attrs.drawable)bg=e.attrs.drawable;if(e.name==='foreground'&&e.attrs.drawable)fg=e.attrs.drawable;});
+   function layer(at){if(!at)return Promise.resolve(null);if(at.type>=0x1c&&at.type<=0x1f)return Promise.resolve({w:108,h:108,body:'<rect width="108" height="108" fill="'+colorOf(at,map)+'"/>'});
+    if(at.type===1){if((at.data>>>24)===1){var sys={0x0106000b:'#ffffff',0x0106000c:'#000000',0x0106000d:'rgba(0,0,0,0)'}[at.data]||'#2b2f36';
+      return Promise.resolve({w:108,h:108,body:'<rect width="108" height="108" fill="'+sys+'"/>'});}   // cor do sistema Android
+     return drawableSvg(file,idx,map,at.data,depth+1);}
+    return Promise.resolve(null);}
+   return Promise.all([layer(bg),layer(fg)]).then(function(ls){var body='';ls.forEach(function(l){if(l)body+='<svg width="108" height="108" viewBox="0 0 '+l.w+' '+l.h+'" preserveAspectRatio="none">'+l.body+'</svg>';});
+    return body?{w:108,h:108,body:body,adaptive:true}:null;});}
+  return null;});}
+function svgDoc(d){var vb=d.adaptive?'18 18 72 72':('0 0 '+d.w+' '+d.h);
+ return '<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="'+vb+'">'+d.body+'</svg>';}
+/* no navegador: SVG -> PNG 192x192 */
+function svgToPng(svg){return new Promise(function(ok,fail){var img=new Image();var url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));
+ img.onload=function(){try{var c=document.createElement('canvas');c.width=192;c.height=192;var g=c.getContext('2d');g.drawImage(img,0,0,192,192);URL.revokeObjectURL(url);c.toBlob(function(b){b?ok(b):fail(new Error('png'));},'image/png');}catch(e){fail(e);}};
+ img.onerror=function(){URL.revokeObjectURL(url);fail(new Error('svg'));};img.src=url;});}
+function apkIcon(file,idx,map,ids){var tried=0;
+ function tryId(k){if(k>=ids.length)return Promise.resolve(null);var rid=ids[k];if(!rid)return tryId(k+1);var f=bestFile(map,rid);if(!f)return tryId(k+1);
+  if(f.path)return zipRead(file,idx[f.path]).then(function(b){return b?{bytes:b,ext:f.path.split('.').pop().toLowerCase()}:tryId(k+1);});
+  // ícone em XML (vetor / adaptativo): desenha como SVG
+  return drawableSvg(file,idx,map,rid,0).catch(function(){return null;}).then(function(d){if(!d)return tryId(k+1);if(d.png&&!d.adaptive)return {bytes:d.png,ext:d.ext};return {svg:svgDoc(d)};});}
+ return tryId(0).then(function(r){if(r)return r;
+  // plano B: maior ic_launcher*.png dentro de res/
+  var best=null;Object.keys(idx).forEach(function(n){if(/^res\\/(mipmap|drawable)[^/]*\\/ic_launcher[^/]*\\.(png|webp)$/i.test(n)&&!/foreground|background|monochrome/i.test(n)){var sc=/xxxhdpi/.test(n)?4:/xxhdpi/.test(n)?3:/xhdpi/.test(n)?2:1;if(!best||sc>best.sc)best={n:n,sc:sc};}});
+  if(!best)return null;return zipRead(file,idx[best.n]).then(function(b){return b?{bytes:b,ext:best.n.split('.').pop().toLowerCase()}:null;});});}
 function apkInfo(file){var low=file.name.toLowerCase();
- if(low.endsWith('.xapk')||low.endsWith('.apks')){return zipEntry(file,'manifest.json').then(function(b){if(!b)return zipEntry(file,'info.json');return b;}).then(function(b){if(!b)return null;
-   var j=JSON.parse(new TextDecoder().decode(b));return {pkg:j.package_name||j.pname||j.packageName,label:j.name||j.label||'',ver:j.version_name||j.versionName||''};});}
- return zipEntry(file,'AndroidManifest.xml').then(function(b){return b?axmlInfo(b):null;});}
+ return zipIndex(file).then(function(idx){
+  if(low.endsWith('.xapk')||low.endsWith('.apks')){
+   var mf=idx['manifest.json']?'manifest.json':(idx['info.json']?'info.json':null);
+   return zipRead(file,idx[mf]).then(function(b){var j=b?JSON.parse(new TextDecoder().decode(b)):{};
+    var info={pkg:j.package_name||j.pname||j.packageName,label:j.name||j.label||'',ver:j.version_name||j.versionName||''};
+    var iconName=idx['icon.png']?'icon.png':(idx['icon.webp']?'icon.webp':null);
+    if(iconName)return zipRead(file,idx[iconName]).then(function(ib){if(ib)info.icon={bytes:ib,ext:iconName.split('.').pop()};return info;});
+    // sem icon.png: tenta o APK base de dentro do pacote
+    var base=info.pkg&&idx[info.pkg+'.apk']?info.pkg+'.apk':(idx['base.apk']?'base.apk':null);
+    if(!base)return info;
+    return zipRead(file,idx[base]).then(function(ab){if(!ab)return info;return apkInfo(new File([ab],'base.apk')).then(function(r){if(r&&r.icon)info.icon=r.icon;if(!info.label&&r&&r.label)info.label=r.label;return info;});});});}
+  return zipRead(file,idx['AndroidManifest.xml']).then(function(mb){var m=mb?axmlInfo(mb):null;if(!m)return null;
+   return zipRead(file,idx['resources.arsc']).then(function(rb){var map=null;try{map=rb?arscParse(rb):null;}catch(e){map=null;}
+    if(map&&!m.label&&m.labelRef){var lv=(map[m.labelRef]||[]).filter(function(v){return v.type===3&&v.value;});if(lv.length)m.label=lv[0].value;}
+    return apkIcon(file,idx,map||{},[m.icon,m.roundIcon]).catch(function(){return null;}).then(function(ic){if(ic)m.icon=ic;else delete m.icon;return m;});});});});}
 var tTimer;function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(tTimer);tTimer=setTimeout(function(){t.classList.remove('show');},2600);}
 function setWho(){var av=document.getElementById('whoav');av.textContent=(currentUser||'?').charAt(0);av.style.background=userColor(currentUser);document.getElementById('whoami').textContent=currentUser||'';}
 function doLogin(e){e.preventDefault();var u=(document.getElementById('lu').value||'').trim();var p=document.getElementById('lp').value||'';var err=document.getElementById('login-err');err.textContent='';
