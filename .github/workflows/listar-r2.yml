@@ -1,0 +1,35 @@
+name: listar-r2
+# Lista os arquivos do bucket R2 (nomes exatos e tamanhos). Prefixo opcional.
+on:
+  workflow_dispatch:
+    inputs:
+      prefixo:
+        description: 'Prefixo (ex.: extras/). Vazio = tudo'
+        required: false
+        default: ''
+jobs:
+  listar:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      PREFIXO: ${{ github.event.inputs.prefixo }}
+    steps:
+      - run: |
+          python3 - <<'PY'
+          import json, os, urllib.request, urllib.parse
+          acc, tok, pre = os.environ["CLOUDFLARE_ACCOUNT_ID"], os.environ["CLOUDFLARE_API_TOKEN"], os.environ.get("PREFIXO", "")
+          cursor = None; total = 0
+          while True:
+              q = {"per_page": "1000"}
+              if pre: q["prefix"] = pre
+              if cursor: q["cursor"] = cursor
+              url = f"https://api.cloudflare.com/client/v4/accounts/{acc}/r2/buckets/unlock-byd/objects?" + urllib.parse.urlencode(q)
+              r = json.load(urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Bearer " + tok})))
+              for o in r.get("result", []):
+                  total += 1; print(repr(o["key"]), o.get("size"))
+              info = r.get("result_info") or {}
+              cursor = info.get("cursor")
+              if not info.get("is_truncated"): break
+          print("total:", total)
+          PY
