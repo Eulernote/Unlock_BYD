@@ -63,6 +63,7 @@ class MainActivity : Activity() {
     private lateinit var swipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     private var selfLatestVc = 0
     private var selfUrl = ""
+    private var selfAutoTried = false
     private var currentPlan = "basico"
     private var currentGrupo = "byd_simples"
     private var selectedModel: String? = null
@@ -174,9 +175,7 @@ class MainActivity : Activity() {
 
     private fun scheduleDailyCheck() {
         try {
-            val req = PeriodicWorkRequest.Builder(CheckWorker::class.java, 15, TimeUnit.MINUTES)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
-            WorkManager.getInstance(this).enqueueUniquePeriodicWork("ubyd-check", ExistingPeriodicWorkPolicy.UPDATE, req)
+            BootReceiver.schedule(applicationContext, now = false)
         } catch (e: Exception) {}
     }
 
@@ -298,7 +297,14 @@ class MainActivity : Activity() {
         Thread {
             val entries = try { parseCatalog(Store.httpGet(Store.CATALOG_URL) ?: "") } catch (e: Exception) { null }
             val sv = Store.selfVersion()
-            runOnUiThread { selfLatestVc = sv.first; selfUrl = sv.second; renderCatalog(entries) }
+            runOnUiThread {
+                selfLatestVc = sv.first; selfUrl = sv.second; renderCatalog(entries)
+                // Versão nova do Unlock BYD: com Device Owner, atualiza sozinho assim que a loja abre.
+                if (!selfAutoTried && selfLatestVc > ownVersionCode() && selfUrl.isNotEmpty() && dpm.isDeviceOwnerApp(packageName)) {
+                    selfAutoTried = true
+                    enqueue(AppEntry("Unlock BYD", packageName, selfUrl, "", ""))
+                }
+            }
         }.start()
     }
 

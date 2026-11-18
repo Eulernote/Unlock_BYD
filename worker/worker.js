@@ -65,10 +65,12 @@ async function getSeen(env, id){ const v = await env.KV.get('seen:'+id); return 
 async function touchSeen(env, id, now){ const last = await getSeen(env, id); if(now - last >= SEEN_MIN_MS) await putSeen(env, id, now); }
 // Versão do app e do Android de cada carro (só grava quando muda).
 async function getVer(env, id){ return await env.KV.get('ver:'+id, {type:'json'}); }
-async function touchVer(env, id, vc, sdk){
+async function touchVer(env, id, vc, sdk, au){
   if(!vc) return;
   const cur = await getVer(env, id);
-  if(!cur || cur.vc !== vc || cur.sdk !== sdk) await env.KV.put('ver:'+id, JSON.stringify({vc:vc, sdk:sdk, at:Date.now()}));
+  const auS = JSON.stringify(au || null);
+  if(!cur || cur.vc !== vc || cur.sdk !== sdk || JSON.stringify(cur.au || null) !== auS)
+    await env.KV.put('ver:'+id, JSON.stringify({vc:vc, sdk:sdk, au: au || null, at:Date.now()}));
 }
 // Última versão publicada do app (lida do app_version.json no R2).
 async function latestVc(env){
@@ -181,6 +183,8 @@ async function handle(request, env){
       if(!id) return json({error:'id'}, 400);
       const vc = parseInt(b.vc) || 0;     // versionCode do app (v13+). Versões antigas não mandam.
       const sdk = parseInt(b.sdk) || 0;   // API do Android (29 = Android 10, 30 = 11, 34 = 14...)
+      // Últimas atualizações automáticas feitas pelo carro (v14+): [{p:pacote, t:ms}]
+      const au = Array.isArray(b.au) ? b.au.slice(0, 6).map(x => ({p: String(x && x.p || '').slice(0, 120), t: parseInt(x && x.t) || 0})).filter(x => x.p) : null;
       let c = await getCar(env, id);
       const now = Date.now();
       if(!c){
@@ -191,7 +195,7 @@ async function handle(request, env){
                owner:null, plan:'basico', grupo:grupo, ask: b.ask===true, wipe:false, reg:now, seen:now, log:[], allowRemove:false, allowRemoveBy:null};
           await putCar(env, c);
           await putSeen(env, id, now);
-          await touchVer(env, id, vc, sdk);
+          await touchVer(env, id, vc, sdk, au);
           return json({status:'pending', plan:'basico', grupo:grupo, wipe:false});
         }
         // Cadastro ausente durante o polling = veículo foi excluído do painel.
@@ -199,7 +203,7 @@ async function handle(request, env){
       }
       // Carro já cadastrado: grava SÓ o "visto por último" e a versão, nunca reescreve car:<id>.
       await touchSeen(env, id, now);
-      await touchVer(env, id, vc, sdk);
+      await touchVer(env, id, vc, sdk, au);
       return json({status:c.status, wipe: c.status==='revoked' ? !!c.wipe : false, plan: c.plan||'basico', grupo: c.grupo||'byd_simples'});
     }
 
@@ -234,7 +238,8 @@ async function handle(request, env){
           cars.push({
             id:c.id, nome:c.nome, status:c.status, owner:c.owner, plan: c.plan||'basico', grupo: c.grupo||'byd_simples', ask: !!c.ask, wipe:!!c.wipe,
             reg: fmt(c.reg), seen: fmt(sv || c.seen || c.reg), log: c.log||[], allowRemove: !!c.allowRemove,
-            vc: ver ? ver.vc : 0, sdk: ver ? ver.sdk : 0
+            vc: ver ? ver.vc : 0, sdk: ver ? ver.sdk : 0,
+            au: ver && Array.isArray(ver.au) ? ver.au.map(x => ({p:x.p, when: fmt(x.t)})) : null
           });
         }
       }
@@ -624,6 +629,8 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  if(c.allowRemove) h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px;margin-top:10px">Remoção de Device Owner autorizada — aguardando o carro aplicar.</div>';
  else h+='<button class="btn" style="width:100%;margin-top:10px;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="allowRemoval(\\''+c.id+'\\')">Autorizar remoção de Device Owner</button>';
  h+='<button class="btn" style="width:100%;margin-top:18px;background:transparent;border:1px solid var(--red);color:var(--red)" onclick="askDelete(\\''+c.id+'\\')">Excluir veículo</button>';
+ if(c.au&&c.au.length){h+='<div class="sec-title" style="margin:16px 0 4px">Atualizações automáticas recentes</div>'+c.au.map(function(x){return '<div class="logrow"><span class="logby">'+esc(x.p)+'</span><span class="logwhen">'+x.when+'</span></div>';}).join('');}
+ else if(c.vc>=14){h+='<div style="font-size:11.5px;color:var(--faint);margin-top:14px">Nenhuma atualização automática de apps registrada.</div>';}
  document.getElementById('d-actions').innerHTML=h;
  var log=(c.log||[]).slice().reverse();var dl=document.getElementById('d-log');
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}

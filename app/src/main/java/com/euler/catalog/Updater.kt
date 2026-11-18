@@ -54,8 +54,16 @@ object Updater {
         for (a in Store.catalogApps()) {
             if (a.pkg == ctx.packageName) continue
             if (!isInstalled(ctx, a.pkg)) continue
-            if (a.build > Store.getBuild(ctx, a.pkg)) {
-                if (silentInstall(ctx, a.url, a.pkg)) Store.setBuild(ctx, a.pkg, a.build)
+            val cur = Store.getBuild(ctx, a.pkg)
+            // App instalado fora da loja (ex.: ADB na preparação do carro): só anota o build atual, NÃO reinstala.
+            // (Antes ele reinstalava todos esses apps em sequência, fechando o YouTube etc. no meio do uso.)
+            if (cur == 0) { Store.setBuild(ctx, a.pkg, a.build); continue }
+            if (a.build > cur) {
+                // No máximo 2 tentativas por build: se falhar (ex.: versão do catálogo menor que a instalada), desiste.
+                val tries = Store.getTries(ctx, a.pkg, a.build)
+                if (tries >= 2) continue
+                Store.setTries(ctx, a.pkg, a.build, tries + 1)
+                if (silentInstall(ctx, a.url, a.pkg)) { Store.setBuild(ctx, a.pkg, a.build); Store.logAuto(ctx, a.pkg) }
             }
         }
     }

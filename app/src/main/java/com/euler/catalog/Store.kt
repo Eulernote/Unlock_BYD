@@ -80,6 +80,20 @@ object Store {
     }
     fun getBuild(ctx: Context, pkg: String): Int = prefs(ctx).getInt("b_$pkg", 0)
     fun setBuild(ctx: Context, pkg: String, n: Int) { prefs(ctx).edit().putInt("b_$pkg", n).apply() }
+    fun getTries(ctx: Context, pkg: String, build: Int): Int = prefs(ctx).getInt("t_${pkg}_$build", 0)
+    fun setTries(ctx: Context, pkg: String, build: Int, n: Int) { prefs(ctx).edit().putInt("t_${pkg}_$build", n).apply() }
+
+    /** Guarda as últimas atualizações automáticas (pacote + hora), enviadas ao painel no heartbeat. */
+    fun logAuto(ctx: Context, pkg: String) {
+        val list = (prefs(ctx).getString("autolog", "") ?: "").split(';').filter { it.isNotBlank() }.toMutableList()
+        list.add(0, pkg + "@" + System.currentTimeMillis())
+        prefs(ctx).edit().putString("autolog", list.take(6).joinToString(";")).apply()
+    }
+    private fun autoLogJson(ctx: Context): String {
+        val items = (prefs(ctx).getString("autolog", "") ?: "").split(';').filter { it.contains('@') }
+        return items.joinToString(",", "[", "]") { val p = it.substringBefore('@'); val t = it.substringAfter('@')
+            "{\"p\":\"" + p.replace("\"", "") + "\",\"t\":" + (t.toLongOrNull() ?: 0L) + "}" }
+    }
     fun displayName(ctx: Context): String {
         val m = prefs(ctx).getString("model", "") ?: ""
         val n = prefs(ctx).getString("firstname", "") ?: ""
@@ -95,7 +109,7 @@ object Store {
             val grupo = prefs(ctx).getString("grupo", "byd_simples")
             val ask = prefs(ctx).getBoolean("ask", false)
             val extra = if (firstTime) ",\"register\":true,\"grupo\":\"$grupo\",\"ask\":$ask" else ""
-            val ver = ",\"vc\":${ownVersionCode(ctx)},\"sdk\":${Build.VERSION.SDK_INT}"
+            val ver = ",\"vc\":${ownVersionCode(ctx)},\"sdk\":${Build.VERSION.SDK_INT},\"au\":${autoLogJson(ctx)}"
             val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$ver}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
