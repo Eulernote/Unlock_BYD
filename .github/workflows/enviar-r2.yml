@@ -1,0 +1,27 @@
+name: enviar-r2
+# Envia para o R2 os arquivos que estiverem na pasta r2/ da branch "r2-envio".
+# Ex.: r2/apps/CubeEvil4.apk -> R2 apps/CubeEvil4.apk. Depois de enviar, a branch pode ser apagada.
+on:
+  push:
+    branches: [ r2-envio ]
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm i -g wrangler@4
+      - name: Enviar
+        run: |
+          set -e
+          cd r2
+          find . -type f | sed 's#^\./##' | while read -r k; do
+            echo "-> $k"
+            wrangler r2 object put "unlock-byd/$k" --file "$k" --remote
+          done
