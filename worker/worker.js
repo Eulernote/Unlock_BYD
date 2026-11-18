@@ -763,7 +763,11 @@ function openCat(){document.getElementById('cat').style.display='flex';catMsg(''
 function closeCat(){if(catSaving&&!confirm('Há um envio em andamento. Fechar mesmo assim?'))return;document.getElementById('cat').style.display='none';}
 function catLoad(){document.getElementById('cat-body').innerHTML='<div class="empty">Carregando…</div>';
  return api('/api/catalog').then(function(r){if(r.error)throw new Error(r.error);CAT=r.catalog||{apps:[]};if(!CAT.apps)CAT.apps=[];CAT_ETAG=r.etag;catList();}).catch(function(e){document.getElementById('cat-body').innerHTML='<div class="empty">Não consegui carregar o catálogo: '+esc(e.message||e)+'</div>';});}
-function catSave(){return api('/api/catalog',{method:'PUT',body:{catalog:CAT,etag:CAT_ETAG}}).then(function(r){
+/* tamanho aproximado de cada app (APK + extras), pelo tamanho dos arquivos no R2 */
+function fillSizes(){return api('/api/files').then(function(r){var sz={};(r.files||[]).forEach(function(f){sz[f.key]=f.size;});
+ (CAT.apps||[]).forEach(function(a){var t=0,ok=true;[a.url].concat((a.extras||[]).map(function(x){return x.url;})).forEach(function(u){var k=urlKey(u);if(k&&sz[k]!=null)t+=sz[k];else ok=false;});
+  if(t>0&&ok)a.tamanho=t;else if(t>0&&!a.tamanho)a.tamanho=t;});}).catch(function(){});}
+function catSave(){return fillSizes().then(function(){return api('/api/catalog',{method:'PUT',body:{catalog:CAT,etag:CAT_ETAG}});}).then(function(r){
   if(r.error==='conflict')throw new Error('outra pessoa salvou o catálogo agora há pouco. Abra a Loja de novo e refaça a alteração.');
   if(r.error)throw new Error(r.error);CAT_ETAG=r.etag;return r;});}
 function keyUrl(k){return location.origin+'/f/'+k.split('/').map(encodeURIComponent).join('/');}
@@ -776,7 +780,7 @@ function catRows(){var q=((document.getElementById('cat-q')||{}).value||'').toLo
  apps.forEach(function(a,i){if(q&&(a.name+' '+a.package).toLowerCase().indexOf(q)<0)return;
   var gs=(a.grupos||[]).map(function(g){return grupoBadge(g);}).join(' ');
   h+='<div class="crow">'+(a.icon?'<img src="'+esc(a.icon)+'" alt="">':'<div class="cicon"></div>')
-   +'<div class="cn"><b>'+esc(a.name)+'</b><div>'+planBadge(a.plano||'basico')+' '+gs+' <span>build '+(a.build||0)+'</span>'+((a.extras&&a.extras.length)?' <span>· '+a.extras.length+' extra(s)</span>':'')+(a.tutorial?' <span>· tutorial</span>':'')+(a.lock_url?' <span>· instalador do Android</span>':'')+'</div></div>'
+   +'<div class="cn"><b>'+esc(a.name)+'</b><div>'+planBadge(a.plano||'basico')+' '+gs+' <span>build '+(a.build||0)+'</span>'+(a.tamanho?' <span>· ~'+fmtSize(a.tamanho)+'</span>':'')+((a.extras&&a.extras.length)?' <span>· '+a.extras.length+' extra(s)</span>':'')+(a.tutorial?' <span>· tutorial</span>':'')+(a.lock_url?' <span>· instalador do Android</span>':'')+'</div></div>'
    +'<button class="fbtn" onclick="catMove('+i+',-1)" title="Subir">↑</button><button class="fbtn" onclick="catMove('+i+',1)" title="Descer">↓</button>'
    +'<button class="fbtn" onclick="catEdit('+i+')">Editar</button><button class="fbtn del" onclick="catDel('+i+')">Excluir</button></div>';});
  document.getElementById('cat-rows').innerHTML=h;}

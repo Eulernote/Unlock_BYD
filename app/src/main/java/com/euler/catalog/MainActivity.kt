@@ -101,7 +101,7 @@ class MainActivity : Activity() {
     private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
 
     private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList(), val build: Int = 0,
-                                val extras: List<Extras.Extra> = emptyList(), val tutorial: String = "", val lockUrl: String = "")
+                                val extras: List<Extras.Extra> = emptyList(), val tutorial: String = "", val lockUrl: String = "", val size: Long = 0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -382,7 +382,7 @@ class MainActivity : Activity() {
             }
         }
         val inst = isInstalled(e.pkg)
-        val st = tv(if (inst) "Instalado" else "Disponível", 11f, if (inst) GREEN else MUTED).apply { setPadding(0, dp(4), 0, 0) }
+        val st = tv(stateText(e, inst), 11f, if (inst) GREEN else MUTED).apply { setPadding(0, dp(4), 0, 0) }
         statusViews[e.pkg] = st
         info.addView(st)
 
@@ -441,7 +441,7 @@ class MainActivity : Activity() {
                 val g = ArrayList<String>()
                 o.optJSONArray("grupos")?.let { for (k in 0 until it.length()) { val v = it.optString(k).trim().lowercase(); if (v.isNotEmpty()) g.add(v) } }
                 out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g, o.optInt("build", 0),
-                    Extras.parse(o), o.optString("tutorial").trim(), o.optString("lock_url").trim()))
+                    Extras.parse(o), o.optString("tutorial").trim(), o.optString("lock_url").trim(), o.optLong("tamanho", 0L)))
             }
         }
         return out
@@ -510,8 +510,14 @@ class MainActivity : Activity() {
     }
 
     /** Marca como instalado em tempo real: status verde + botão vira "Reinstalar". */
+    /** "Disponível · ~1,3 GB" / "Instalado · ~1,3 GB" (tamanho aproximado: APK + extras). */
+    private fun stateText(e: AppEntry?, inst: Boolean): String {
+        val base = if (inst) "Instalado" else "Disponível"
+        return if (e != null && e.size > 0) "$base · ~${Extras.sizeText(e.size)}" else base
+    }
+
     private fun markInstalled(pkg: String) {
-        setStatus(pkg, if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) "Instalado" else "Liberado", GREEN)
+        setStatus(pkg, if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) stateText(entriesByPkg[pkg], true) else "Liberado", GREEN)
         buttonViews[pkg]?.let { b -> b.text = "Reinstalar"; styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER) }
         if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) uninstallViews[pkg]?.visibility = View.VISIBLE else lockedInstaller.remove(pkg)
     }
@@ -695,7 +701,7 @@ class MainActivity : Activity() {
 
     /** Marca como não instalado em tempo real. */
     private fun markUninstalled(pkg: String) {
-        setStatus(pkg, "Disponível", MUTED)
+        setStatus(pkg, stateText(entriesByPkg[pkg], false), MUTED)
         buttonViews[pkg]?.let { b -> b.text = "Instalar"; styleBtn(b, ACCENT, 0xFF04201D.toInt()) }
         uninstallViews[pkg]?.visibility = View.GONE
         try { Store.setBuild(applicationContext, pkg, 0) } catch (_: Exception) {}

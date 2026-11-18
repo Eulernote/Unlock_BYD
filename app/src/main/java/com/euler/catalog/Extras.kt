@@ -162,15 +162,22 @@ object Extras {
                 // Limpa a pasta "embrulho" que uma instalação antiga possa ter deixado dentro da pasta do jogo (ex.: Android/obb/com.jogo/OBB DFL).
                 if (root != null && wrapper != null && wrapper != pkg) try { File(root, wrapper).deleteRecursively() } catch (_: Exception) {}
                 val total = entries.sumOf { maxOf(it.size, 0L) }.coerceAtLeast(1L); var done = 0L; var lastPct = -1
+                fun tick() { val pct = ((done * 100) / total).toInt().coerceIn(0, 100); if (pct != lastPct) { lastPct = pct; report("Extraindo ${ex.nome}…  $pct%") } }
+                tick()
                 for (en in entries) {
                     val rel = map(en.name)
-                    if (rel == null || rel.isEmpty()) { done += maxOf(en.size, 0L); continue }
-                    val ok = zf.getInputStream(en).use { write(rel, it) }
+                    if (rel == null || rel.isEmpty()) { done += maxOf(en.size, 0L); tick(); continue }
+                    // conta os bytes enquanto extrai, para a porcentagem andar mesmo em arquivos enormes (ex.: um .obb de 1 GB)
+                    val ok = zf.getInputStream(en).use { raw ->
+                        val counting = object : java.io.FilterInputStream(raw) {
+                            override fun read(): Int { val r = super.read(); if (r >= 0) { done++; if (done % 1048576L == 0L) tick() }; return r }
+                            override fun read(b: ByteArray, off: Int, len: Int): Int { val r = super.read(b, off, len); if (r > 0) { done += r; tick() }; return r }
+                        }
+                        write(rel, counting)
+                    }
                     if (!ok) return false
-                    done += maxOf(en.size, 0L)
-                    val pct = ((done * 100) / total).toInt()
-                    if (pct != lastPct) { lastPct = pct; report("Extraindo ${ex.nome}…  $pct%") }
                 }
+                done = total; tick()
             }
             return true
         } catch (e: DlError) { throw e }
@@ -278,7 +285,11 @@ object Extras {
     private fun legacyDir(rel: String) = File(Environment.getExternalStorageDirectory(), rel.trimEnd('/'))
 
     private fun progressText(verb: String, nome: String, pct: Int, bytes: Long) =
-        if (pct >= 0) "$verb $nome…  $pct%" else "$verb $nome…  ${bytes / 1_000_000} MB"
+        if (pct >= 0) "$verb $nome…  $pct% · ${sizeText(bytes)}" else "$verb $nome…  ${sizeText(bytes)}"
+
+    /** "850 MB" / "1,3 GB" */
+    fun sizeText(n: Long): String = if (n >= 1_000_000_000L) String.format(java.util.Locale("pt", "BR"), "%.1f GB", n / 1_073_741_824.0)
+        else "${maxOf(1L, n / 1_048_576L)} MB"
 
     // ---------- HTTP ----------
     private fun open(urlStr: String, method: String, from: Long = 0L): HttpURLConnection? {
