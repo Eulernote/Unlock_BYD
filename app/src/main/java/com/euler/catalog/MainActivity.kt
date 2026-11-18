@@ -54,6 +54,9 @@ class MainActivity : Activity() {
     private var current: AppEntry? = null
     private val statusViews = HashMap<String, TextView>()
     private val buttonViews = HashMap<String, Button>()
+    private val uninstallViews = HashMap<String, Button>()
+    private val entriesByPkg = HashMap<String, AppEntry>()
+    private val ACTION_UNINSTALL = "com.euler.catalog.UNINSTALL_STATUS"
     private lateinit var swipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     private var selfLatestVc = 0
     private var selfUrl = ""
@@ -119,6 +122,8 @@ class MainActivity : Activity() {
 
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL), Context.RECEIVER_NOT_EXPORTED)
         else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(statusReceiver, IntentFilter(ACTION_INSTALL))
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(uninstallReceiver, IntentFilter(ACTION_UNINSTALL), Context.RECEIVER_NOT_EXPORTED)
+        else @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(uninstallReceiver, IntentFilter(ACTION_UNINSTALL))
 
         cleanTemps()
         scheduleDailyCheck()
@@ -137,7 +142,7 @@ class MainActivity : Activity() {
     private fun startPolling() { poller.removeCallbacks(pollRunnable); poller.postDelayed(pollRunnable, 30_000) }
     private fun stopPolling() { poller.removeCallbacks(pollRunnable) }
 
-    override fun onResume() { super.onResume(); if (Store.isOnboarded(this)) startPolling() }
+    override fun onResume() { super.onResume(); if (Store.isOnboarded(this)) startPolling(); refreshInstalledStates() }
     override fun onPause() { super.onPause(); stopPolling() }
 
     // ---------- helpers de UI ----------
@@ -295,7 +300,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderCatalog(entries: List<AppEntry>?) {
-        container.removeAllViews(); statusViews.clear(); buttonViews.clear()
+        container.removeAllViews(); statusViews.clear(); buttonViews.clear(); uninstallViews.clear(); entriesByPkg.clear()
         container.addView(headerView("Loja do veículo"))
         container.addView(selfCard())
         if (entries == null) {
@@ -383,8 +388,19 @@ class MainActivity : Activity() {
         if (inst) btn.background = rounded(SURFACE2, 9, 1, BORDER)
         btn.setOnClickListener { enqueue(e) }
         buttonViews[e.pkg] = btn
+        entriesByPkg[e.pkg] = e
 
-        card.addView(icon); card.addView(info); card.addView(btn)
+        // Coluna de botões: Instalar/Reinstalar + Desinstalar (só aparece se o app estiver instalado).
+        val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.gravity = Gravity.CENTER_HORIZONTAL
+        val un = Button(this); un.text = "Desinstalar"; styleBtn(un, SURFACE, RED); un.background = rounded(SURFACE, 9, 1, RED)
+        val ulp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); ulp.topMargin = dp(6); un.layoutParams = ulp
+        un.visibility = if (inst) View.VISIBLE else View.GONE
+        un.setOnClickListener { confirmUninstall(e) }
+        uninstallViews[e.pkg] = un
+        btn.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        col.addView(btn); col.addView(un)
+
+        card.addView(icon); card.addView(info); card.addView(col)
         outer.addView(card); tutView?.let { outer.addView(it) }
         return outer
     }
@@ -472,6 +488,7 @@ class MainActivity : Activity() {
     private fun markInstalled(pkg: String) {
         setStatus(pkg, "Instalado", GREEN)
         buttonViews[pkg]?.let { b -> b.text = "Reinstalar"; styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER) }
+        uninstallViews[pkg]?.visibility = View.VISIBLE
     }
 
     private fun processNext() {
@@ -594,6 +611,63 @@ class MainActivity : Activity() {
         try { cacheDir.listFiles()?.forEach { if (it.name.endsWith(".dl") || it.name.startsWith("sp_")) it.deleteRecursively() } } catch (_: Exception) {}
     }
 
+    // ---------- desinstalação ----------
+    private fun confirmUninstall(e: AppEntry) {
+        if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) { toast("Aguarde terminar a instalação"); return }
+        val extra = if (e.extras.isNotEmpty()) "\n\nOs arquivos extras deste app (${e.extras.joinToString { it.nome }}) também serão apagados da pasta Download." else ""
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Desinstalar ${e.name}?")
+            .setMessage("O app será removido do carro.$extra")
+            .setPositiveButton("Desinstalar") { _, _ -> uninstall(e) }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun uninstall(e: AppEntry) {
+        setStatus(e.pkg, "Desinstalando…", MUTED)
+        if (e.extras.isNotEmpty()) Thread { for (x in e.extras) try { Extras.remove(applicationContext, x) } catch (_: Exception) {} }.start()
+        if (dpm.isDeviceOwnerApp(packageName)) {
+            // Device Owner: remove em silêncio.
+            try {
+                val flags = PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+                val pi = PendingIntent.getBroadcast(this, e.pkg.hashCode(), Intent(ACTION_UNINSTALL).setPackage(packageName).putExtra("pkg", e.pkg), flags)
+                packageManager.packageInstaller.uninstall(e.pkg, pi.intentSender)
+            } catch (ex: Exception) { setStatus(e.pkg, "Falha ao desinstalar", RED) }
+        } else {
+            // Sem Device Owner: abre a confirmação do Android.
+            try { startActivity(Intent(Intent.ACTION_DELETE, android.net.Uri.parse("package:" + e.pkg)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            catch (ex: Exception) { setStatus(e.pkg, "Falha ao desinstalar", RED) }
+        }
+    }
+
+    /** Marca como não instalado em tempo real. */
+    private fun markUninstalled(pkg: String) {
+        setStatus(pkg, "Disponível", MUTED)
+        buttonViews[pkg]?.let { b -> b.text = "Instalar"; styleBtn(b, ACCENT, 0xFF04201D.toInt()) }
+        uninstallViews[pkg]?.visibility = View.GONE
+        try { Store.setBuild(applicationContext, pkg, 0) } catch (_: Exception) {}
+    }
+
+    private val uninstallReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) {
+            val pkg = i?.getStringExtra("pkg") ?: return
+            when (i.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
+                PackageInstaller.STATUS_SUCCESS -> markUninstalled(pkg)
+                PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    val confirm: Intent? = if (Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                    else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_INTENT)
+                    confirm?.let { startActivity(it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                }
+                else -> setStatus(pkg, "Falha ao desinstalar", RED)
+            }
+        }
+    }
+
+    // Ao voltar da tela de confirmação do Android (sem Device Owner), atualiza o que foi removido.
+    private fun refreshInstalledStates() {
+        for ((pkg, _) in entriesByPkg) if (!isInstalled(pkg) && uninstallViews[pkg]?.visibility == View.VISIBLE) markUninstalled(pkg)
+    }
+
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) {
             when (i?.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
@@ -633,5 +707,5 @@ class MainActivity : Activity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
-    override fun onDestroy() { super.onDestroy(); stopPolling(); try { unregisterReceiver(statusReceiver) } catch (e: Exception) {} }
+    override fun onDestroy() { super.onDestroy(); stopPolling(); try { unregisterReceiver(statusReceiver) } catch (e: Exception) {}; try { unregisterReceiver(uninstallReceiver) } catch (e: Exception) {} }
 }

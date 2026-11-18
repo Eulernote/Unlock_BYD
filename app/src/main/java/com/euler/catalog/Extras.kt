@@ -43,6 +43,24 @@ object Extras {
         return toDownloads(ctx, ex, onProgress)
     }
 
+    /** Apaga o extra (só cópias feitas por este app). */
+    fun remove(ctx: Context, ex: Extra) {
+        if (ex.destino != "download") return
+        if (Build.VERSION.SDK_INT >= 29) {
+            val rel = Environment.DIRECTORY_DOWNLOADS + "/" + (if (ex.pasta.isNotEmpty()) ex.pasta + "/" else "")
+            try {
+                ctx.contentResolver.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    MediaStore.MediaColumns.RELATIVE_PATH + "=? AND " + MediaStore.MediaColumns.DISPLAY_NAME + "=?", arrayOf(rel, ex.nome))
+            } catch (_: Exception) {}
+        } else {
+            @Suppress("DEPRECATION")
+            val base = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val dir = if (ex.pasta.isNotEmpty()) File(base, ex.pasta) else base
+            File(dir, ex.nome).delete()
+            if (ex.pasta.isNotEmpty()) dir.delete()   // só apaga a pasta se ficou vazia
+        }
+    }
+
     // ---------- Download/<pasta>/<nome> ----------
     private fun toDownloads(ctx: Context, ex: Extra, onProgress: (Int, Long) -> Unit): Boolean {
         val remoteSize = headSize(ex.url)
