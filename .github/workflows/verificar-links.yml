@@ -12,10 +12,11 @@ jobs:
           python3 - <<'PY'
           import json, urllib.request
           S = "https://euler-catalog.eulerfilhogontijodamata.workers.dev"
-          cat = json.load(urllib.request.urlopen(S + "/catalog.json"))
+          UA = {"User-Agent": "Dalvik/2.1.0 (Linux; U; Android 10)"}
+          cat = json.load(urllib.request.urlopen(urllib.request.Request(S + "/catalog.json", headers=UA)))
           def head(u):
               try:
-                  r = urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=30)
+                  r = urllib.request.urlopen(urllib.request.Request(u, method="HEAD", headers=UA), timeout=30)
                   return r.status, int(r.headers.get("Content-Length") or -1)
               except Exception as e:
                   return getattr(e, "code", str(e)), -1
