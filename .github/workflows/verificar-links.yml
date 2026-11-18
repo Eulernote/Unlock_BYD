@@ -1,24 +1,32 @@
 name: verificar-links
-# Confere se arquivos do R2 respondem pelo Worker (HEAD). Entrada: caminhos separados por "|".
+# Testa (HEAD) todos os links do catálogo publicado: APKs, ícones e extras.
 on:
   workflow_dispatch:
-    inputs:
-      caminhos:
-        description: 'Caminhos depois de /f/, separados por |'
-        required: true
 
 jobs:
   verificar:
     runs-on: ubuntu-latest
     steps:
-      - name: HEAD em cada arquivo
-        env:
-          CAMINHOS: ${{ inputs.caminhos }}
+      - name: Testar links
         run: |
-          BASE="https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/"
-          IFS='|' read -ra L <<< "$CAMINHOS"
-          for c in "${L[@]}"; do
-            u="$BASE$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$c")"
-            r=$(curl -s -o /dev/null -I -w "%{http_code} %header{content-length}" "$u")
-            echo "RESULT $r $c"
-          done
+          python3 - <<'PY'
+          import json, urllib.request
+          S = "https://euler-catalog.eulerfilhogontijodamata.workers.dev"
+          cat = json.load(urllib.request.urlopen(S + "/catalog.json"))
+          def head(u):
+              try:
+                  r = urllib.request.urlopen(urllib.request.Request(u, method="HEAD"), timeout=30)
+                  return r.status, int(r.headers.get("Content-Length") or -1)
+              except Exception as e:
+                  return getattr(e, "code", str(e)), -1
+          bad = 0
+          for a in cat.get("apps", []):
+              links = [("apk", a.get("url")), ("icon", a.get("icon")), ("lock", a.get("lock_url"))] + [("extra:" + x.get("destino", "download"), x.get("url")) for x in a.get("extras", [])]
+              for kind, u in links:
+                  if not u: continue
+                  st, n = head(u)
+                  ok = st == 200
+                  bad += 0 if ok else 1
+                  print(("OK  " if ok else "ERRO"), a["name"], kind, st, ("%.1f MB" % (n/1048576)) if n > 0 else "", u)
+          print("links com erro:", bad)
+          PY
