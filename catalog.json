@@ -1,5 +1,5 @@
 {
-  "_como_usar": "Cada app: name, package, url (link direto do asset na release 'apps'). Para atualizar um app, suba a versao nova na release com o MESMO nome de arquivo; o link e a lista nao mudam.",
+  "_como_usar": "Cada app: name, package, url (link do arquivo no R2: painel > Arquivos > Copiar link). Para atualizar um app, suba a versao nova pelo painel com o MESMO nome de arquivo e aumente o build dele aqui.",
   "_extras_e_tutorial": "Opcional (app v13+). extras: arquivos baixados antes do APK para Download/<pasta>/<nome>, ex.: \"extras\": [{\"url\": \"https://.../f/extras/re4/Disco1.bin\", \"pasta\": \"Resident Evil 4\", \"nome\": \"Disco 1.bin\"}]. tutorial: texto que aparece ao tocar no nome do app (use \\n para quebrar linha).",
   "apps": [
     { "name": "Aurora Store",     "package": "com.aurora.store",             "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/apps/AuroraStore.apk", "desc": "Loja de aplicativos Android", "icon": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/icons/aurora.png", "plano": "basico", "grupos": ["byd_simples","byd_google","chery"], "build": 1 },
