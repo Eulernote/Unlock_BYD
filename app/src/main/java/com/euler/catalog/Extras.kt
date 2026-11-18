@@ -116,9 +116,13 @@ object Extras {
             else toDownloads(ctx, ex.url, baseRel, ex.nome) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
         if (!ok) return Result(false)
         val pastaTxt = "Download → " + (ex.pasta.ifEmpty { pkg })
-        val manual = "Este carro é ${androidName()}: o Android não deixa colocar a pasta $kind automaticamente.\n\n" +
-            "Os arquivos foram salvos em $pastaTxt → $pkg.\n\n" +
-            "Para terminar: abra o app Arquivos do carro, entre em $pastaTxt, segure a pasta \"$pkg\", escolha Mover e cole dentro de Android → $kind. Depois abra o jogo."
+        val manual = "Este carro (${androidName()}) não permite a instalação automática da pasta $kind. Os arquivos foram colocados na pasta Download.\n\n" +
+            "Faça manualmente:\n" +
+            "1. Abra o app Arquivos do carro.\n" +
+            "2. Entre em $pastaTxt.\n" +
+            "3. Segure a pasta \"$pkg\" e escolha Mover.\n" +
+            "4. Cole dentro de Android → $kind.\n" +
+            "5. Depois abra o jogo."
         return Result(true, manual)
     }
 
