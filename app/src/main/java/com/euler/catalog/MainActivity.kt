@@ -530,7 +530,8 @@ class MainActivity : Activity() {
                 runOnUiThread { setStatus(e.pkg, "$tag Baixando ${ex.nome}…", MUTED) }
                 val res = try { Extras.fetch(applicationContext, ex, e.pkg) { txt -> runOnUiThread { setStatus(e.pkg, "$tag $txt", MUTED) } } }
                           catch (x: Exception) { Extras.Result(false) }
-                if (!res.ok) { runOnUiThread { setStatus(e.pkg, "Falha ao baixar ${ex.nome}", RED); current = null; processNext() }; return@Thread }
+                if (!res.ok) { val why = res.erro?.let { ": $it" } ?: ""
+                    runOnUiThread { setStatus(e.pkg, "Falha em ${ex.nome}$why", RED); current = null; processNext() }; return@Thread }
                 res.manual?.let { if (!manuals.contains(it)) manuals.add(it) }
             }
             if (manuals.isNotEmpty()) pendingManual[e.pkg] = manuals.joinToString("\n\n— — —\n\n")

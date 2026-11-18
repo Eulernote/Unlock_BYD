@@ -31,8 +31,21 @@ object Extras {
 
     data class Extra(val url: String, val pasta: String, val nome: String, val destino: String = "download")
 
-    /** ok = deu certo; manual = instrução para o usuário quando o arquivo não pôde ir direto para a pasta certa. */
-    data class Result(val ok: Boolean, val manual: String? = null)
+    /** ok = deu certo; manual = instrução quando o arquivo não pôde ir direto para a pasta certa; erro = motivo da falha. */
+    data class Result(val ok: Boolean, val manual: String? = null, val erro: String? = null)
+
+    /** Falha com motivo legível (sem espaço, arquivo não encontrado, conexão caiu...). */
+    class DlError(msg: String) : Exception(msg)
+    private var lastError: String? = null
+
+    private fun gb(n: Long) = String.format(java.util.Locale.US, "%.1f GB", n / 1073741824.0)
+
+    /** Confere se há espaço livre suficiente na pasta (com folga de 200 MB). */
+    private fun checkSpace(dir: File, needed: Long) {
+        if (needed <= 0) return
+        val free = try { android.os.StatFs(dir.absolutePath).availableBytes } catch (e: Exception) { return }
+        if (free < needed + 200L * 1024 * 1024) throw DlError("sem espaço no carro: precisa de ~${gb(needed)} livres, tem ${gb(free)}")
+    }
 
     fun parse(o: JSONObject): List<Extra> {
         val arr = o.optJSONArray("extras") ?: return emptyList()
@@ -56,11 +69,16 @@ object Extras {
 
     /** Baixa o extra para o destino. report recebe o texto de progresso ("Baixando X… 40%"). */
     fun fetch(ctx: Context, ex: Extra, pkg: String, report: (String) -> Unit): Result {
-        return when (ex.destino) {
-            "obb" -> special(ctx, ex, pkg, "obb", report)
-            "data" -> special(ctx, ex, pkg, "data", report)
-            else -> Result(toDownloads(ctx, ex.url, downloadsRel(ex.pasta), ex.nome) { p, b -> report(progressText("Baixando", ex.nome, p, b)) })
-        }
+        lastError = null
+        return try {
+            val r = when (ex.destino) {
+                "obb" -> special(ctx, ex, pkg, "obb", report)
+                "data" -> special(ctx, ex, pkg, "data", report)
+                else -> Result(toDownloads(ctx, ex.url, downloadsRel(ex.pasta), ex.nome) { p, b -> report(progressText("Baixando", ex.nome, p, b)) })
+            }
+            if (!r.ok && r.erro == null) r.copy(erro = lastError) else r
+        } catch (e: DlError) { Result(false, erro = e.message) }
+        catch (e: Exception) { Result(false, erro = lastError ?: e.message) }
     }
 
     // ---------- OBB / data ----------
@@ -80,12 +98,13 @@ object Extras {
                     val remote = remoteSize(ex.url)
                     if (remote > 0 && dest.exists() && dest.length() == remote) true
                     else {
+                        checkSpace(root, remote - (if (dest.exists()) dest.length() else 0L))
                         val tmp = File(root, ex.nome + ".part")
-                        val okd = tmp.outputStream().use { download(ex.url, it) { p, b -> report(progressText("Baixando", ex.nome, p, b)) } }
-                        if (okd) { dest.delete(); tmp.renameTo(dest) } else { tmp.delete(); false }
+                        val okd = downloadFile(ex.url, tmp) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
+                        if (okd) { dest.delete(); tmp.renameTo(dest) } else false
                     }
                 }
-            } catch (e: Exception) { false }
+            } catch (e: DlError) { throw e } catch (e: Exception) { false }
             if (ok) return Result(true)
         }
         // Sem acesso direto: salva em Download/<pasta>/<pacote>/ para o usuário mover.
@@ -115,9 +134,13 @@ object Extras {
     /** Baixa o zip para o cache, descompacta entrada por entrada com write(caminho, conteúdo) e apaga o zip. */
     private fun zipTo(ctx: Context, ex: Extra, report: (String) -> Unit, write: (String, InputStream) -> Boolean): Boolean {
         val tmp = File(ctx.cacheDir, "x_" + ex.nome.hashCode() + ".zip")
+        var keepPart = false
         try {
-            val okd = tmp.outputStream().use { download(ex.url, it) { p, b -> report(progressText("Baixando", ex.nome, p, b)) } }
-            if (!okd) return false
+            // zip baixado + conteúdo extraído: precisa de ~2x o tamanho (descontando o que já foi baixado antes)
+            val remote = remoteSize(ex.url)
+            if (remote > 0) checkSpace(ctx.cacheDir, remote * 2 - (if (tmp.exists()) tmp.length() else 0L))
+            val okd = downloadFile(ex.url, tmp) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
+            if (!okd) { keepPart = true; return false }   // mantém o pedaço baixado para retomar na próxima tentativa
             ZipFile(tmp).use { zf ->
                 val entries = zf.entries().toList().filter { !it.isDirectory && !it.name.contains("..") }
                 val total = entries.sumOf { maxOf(it.size, 0L) }.coerceAtLeast(1L); var done = 0L; var lastPct = -1
@@ -130,7 +153,11 @@ object Extras {
                 }
             }
             return true
-        } catch (e: Exception) { return false } finally { try { tmp.delete() } catch (_: Exception) {} }
+        } catch (e: DlError) { throw e }
+        catch (e: java.util.zip.ZipException) { lastError = "o .zip está corrompido ou incompleto"; return false }
+        catch (e: java.io.IOException) { lastError = if ((e.message ?: "").contains("ENOSPC") || (e.message ?: "").contains("No space")) "sem espaço no carro" else "erro ao extrair: ${e.message}"; return false }
+        catch (e: Exception) { lastError = "erro ao extrair: ${e.message}"; return false }
+        finally { if (!keepPart) try { tmp.delete() } catch (_: Exception) {} }
     }
 
     private fun writeFile(dest: File, inp: InputStream): Boolean = try {
@@ -173,16 +200,23 @@ object Extras {
                     }
                 }
             } catch (_: Exception) {}
-            val uri = insertPending(ctx, rel, nome) ?: return false
-            val ok = try { resolver.openOutputStream(uri, "w")?.use { download(url, it, onProgress) } ?: false } catch (_: Exception) { false }
-            return finishPending(ctx, uri, ok)
+            @Suppress("DEPRECATION")
+            checkSpace(Environment.getExternalStorageDirectory(), remote)
+            for (tentativa in 1..3) {
+                val uri = insertPending(ctx, rel, nome) ?: run { lastError = "não consegui criar o arquivo na pasta Download"; return false }
+                val ok = try { resolver.openOutputStream(uri, "w")?.use { download(url, it, onProgress) } ?: false } catch (_: Exception) { false }
+                if (finishPending(ctx, uri, ok)) return true
+                if (lastError?.contains("404") == true) return false
+                try { Thread.sleep(3000L * tentativa) } catch (_: Exception) {}
+            }
+            return false
         } else {
             val dir = legacyDir(rel); dir.mkdirs()
             val dest = File(dir, nome)
             if (remote > 0 && dest.exists() && dest.length() == remote) return true
+            checkSpace(dir, remote)
             val tmp = File(dir, "$nome.part")
-            val ok = try { tmp.outputStream().use { download(url, it, onProgress) } } catch (_: Exception) { false }
-            if (!ok) { tmp.delete(); return false }
+            if (!downloadFile(url, tmp, onProgress)) return false
             dest.delete(); return tmp.renameTo(dest)
         }
     }
@@ -227,18 +261,62 @@ object Extras {
         if (pct >= 0) "$verb $nome…  $pct%" else "$verb $nome…  ${bytes / 1_000_000} MB"
 
     // ---------- HTTP ----------
-    private fun open(urlStr: String, method: String): HttpURLConnection? {
+    private fun open(urlStr: String, method: String, from: Long = 0L): HttpURLConnection? {
         var url = urlStr; var redirects = 0
-        while (redirects < 6) {
-            val c = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = method; instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000
+        try {
+            while (redirects < 6) {
+                val c = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = method; instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 120000
+                    if (from > 0) setRequestProperty("Range", "bytes=$from-")
+                }
+                val code = c.responseCode
+                if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return null; url = loc; redirects++; continue }
+                if (code == 200 || (from > 0 && code == 206)) return c
+                lastError = if (code == 404) "arquivo não encontrado no servidor (404)" else "o servidor respondeu erro $code"
+                c.disconnect(); return null
             }
-            val code = c.responseCode
-            if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return null; url = loc; redirects++; continue }
-            if (code != 200) { c.disconnect(); return null }
-            return c
-        }
+        } catch (e: Exception) { lastError = "sem conexão com o servidor" }
         return null
+    }
+
+    /** Baixa para um arquivo, retomando de onde parou se a conexão cair (até 6 tentativas). */
+    private fun downloadFile(url: String, dest: File, onProgress: (Int, Long) -> Unit): Boolean {
+        val total = remoteSize(url)
+        if (total > 0 && dest.exists() && dest.length() > total) dest.delete()
+        if (total > 0 && dest.exists() && dest.length() == total) return true
+        for (tentativa in 1..6) {
+            val have = if (dest.exists()) dest.length() else 0L
+            val c = open(url, "GET", have)
+            if (c == null) {
+                if (lastError?.contains("404") == true) return false
+                try { Thread.sleep(4000L * tentativa) } catch (_: Exception) {}
+                continue
+            }
+            try {
+                val resumed = c.responseCode == 206
+                val start = if (resumed) have else 0L
+                val full = if (total > 0) total else (if (c.contentLengthLong > 0) start + c.contentLengthLong else -1L)
+                java.io.FileOutputStream(dest, resumed).use { out ->
+                    c.inputStream.use { inp ->
+                        val buf = ByteArray(64 * 1024); var readTotal = start; var lastPct = -1; var lastMark = 0L
+                        while (true) {
+                            val r = inp.read(buf); if (r < 0) break
+                            out.write(buf, 0, r); readTotal += r
+                            if (full > 0) { val pct = ((readTotal * 100) / full).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct, readTotal) } }
+                            else if (readTotal - lastMark >= 1_000_000) { lastMark = readTotal; onProgress(-1, readTotal) }
+                        }
+                    }
+                }
+                if (full <= 0 || dest.length() == full) return true
+                lastError = "a conexão caiu no meio do download"
+            } catch (e: java.io.IOException) {
+                val m = e.message ?: ""
+                if (m.contains("ENOSPC") || m.contains("No space")) { lastError = "sem espaço no carro"; return false }
+                lastError = "a conexão caiu no meio do download"
+            } finally { c.disconnect() }
+            try { Thread.sleep(4000L * tentativa) } catch (_: Exception) {}
+        }
+        return false
     }
 
     private fun remoteSize(url: String): Long = try {
@@ -258,8 +336,13 @@ object Extras {
                     else if (readTotal - lastMark >= 1_000_000) { lastMark = readTotal; onProgress(-1, readTotal) }
                 }
                 out.flush()
-                return total <= 0 || readTotal == total
+                if (total > 0 && readTotal != total) { lastError = "a conexão caiu no meio do download"; return false }
+                return true
             }
-        } catch (_: Exception) { return false } finally { c.disconnect() }
+        } catch (e: Exception) {
+            val m = e.message ?: ""
+            lastError = if (m.contains("ENOSPC") || m.contains("No space")) "sem espaço no carro" else "a conexão caiu no meio do download"
+            return false
+        } finally { c.disconnect() }
     }
 }
