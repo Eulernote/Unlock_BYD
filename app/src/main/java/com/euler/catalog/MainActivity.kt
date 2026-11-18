@@ -56,6 +56,7 @@ class MainActivity : Activity() {
     private val buttonViews = HashMap<String, Button>()
     private val uninstallViews = HashMap<String, Button>()
     private val entriesByPkg = HashMap<String, AppEntry>()
+    private val lockedInstaller = HashSet<String>()   // instalador do Android travado (Lock/original) neste carro
     private val ACTION_UNINSTALL = "com.euler.catalog.UNINSTALL_STATUS"
     private lateinit var swipe: androidx.swiperefreshlayout.widget.SwipeRefreshLayout
     private var selfLatestVc = 0
@@ -98,7 +99,7 @@ class MainActivity : Activity() {
     private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
 
     private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList(), val build: Int = 0,
-                                val extras: List<Extras.Extra> = emptyList(), val tutorial: String = "")
+                                val extras: List<Extras.Extra> = emptyList(), val tutorial: String = "", val lockUrl: String = "")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -196,7 +197,7 @@ class MainActivity : Activity() {
         currentStatus = status
         when (status) {
             "active" -> showCatalog()
-            "revoked" -> { if (wipe) Thread { Store.uninstallAll(applicationContext) }.start()
+            "revoked" -> { Thread { Store.applyRevoke(applicationContext, wipe) }.start()
                 showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
             "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
             "deleted" -> { Store.clearOnboarding(this); stopPolling(); currentStatus = null; showOnboarding() }
@@ -394,13 +395,14 @@ class MainActivity : Activity() {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.gravity = Gravity.CENTER_HORIZONTAL
         val un = Button(this); un.text = "Desinstalar"; styleBtn(un, SURFACE, RED); un.background = rounded(SURFACE, 9, 1, RED)
         val ulp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); ulp.topMargin = dp(6); un.layoutParams = ulp
-        un.visibility = if (inst) View.VISIBLE else View.GONE
+        un.visibility = if (inst && e.lockUrl.isEmpty()) View.VISIBLE else View.GONE
         un.setOnClickListener { confirmUninstall(e) }
         uninstallViews[e.pkg] = un
         btn.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         col.addView(btn); col.addView(un)
 
         card.addView(icon); card.addView(info); card.addView(col)
+        if (e.lockUrl.isNotEmpty()) checkInstallerState(e)
         outer.addView(card); tutView?.let { outer.addView(it) }
         return outer
     }
@@ -437,7 +439,7 @@ class MainActivity : Activity() {
                 val g = ArrayList<String>()
                 o.optJSONArray("grupos")?.let { for (k in 0 until it.length()) { val v = it.optString(k).trim().lowercase(); if (v.isNotEmpty()) g.add(v) } }
                 out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g, o.optInt("build", 0),
-                    Extras.parse(o), o.optString("tutorial").trim()))
+                    Extras.parse(o), o.optString("tutorial").trim(), o.optString("lock_url").trim()))
             }
         }
         return out
@@ -472,7 +474,23 @@ class MainActivity : Activity() {
     }
 
     // ---------- fila de download/instalação (um por vez) ----------
-    private fun enqueueAll(entries: List<AppEntry>) { entries.filter { !isInstalled(it.pkg) }.forEach { enqueue(it) } }
+    private fun enqueueAll(entries: List<AppEntry>) { entries.filter { !isInstalled(it.pkg) || lockedInstaller.contains(it.pkg) }.forEach { enqueue(it) } }
+
+    /** Instalador do Android: mostra "Liberado" (Unlock instalado) ou "Travado" (instalador da BYD). */
+    private fun checkInstallerState(e: AppEntry) {
+        setStatus(e.pkg, "Verificando…", MUTED)
+        Thread {
+            val unlocked = Store.installerUnlocked(applicationContext, Store.InstallerSwap(e.pkg, e.url, e.lockUrl))
+            runOnUiThread {
+                when (unlocked) {
+                    true -> { lockedInstaller.remove(e.pkg); setStatus(e.pkg, "Liberado", GREEN) }
+                    false -> { lockedInstaller.add(e.pkg); setStatus(e.pkg, "Travado · toque em Instalar para liberar", MUTED)
+                        buttonViews[e.pkg]?.let { b -> b.text = "Instalar"; styleBtn(b, ACCENT, 0xFF04201D.toInt()) } }
+                    null -> setStatus(e.pkg, "Instalado", GREEN)
+                }
+            }
+        }.start()
+    }
 
     private fun enqueue(e: AppEntry) {
         if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) return
@@ -486,9 +504,9 @@ class MainActivity : Activity() {
 
     /** Marca como instalado em tempo real: status verde + botão vira "Reinstalar". */
     private fun markInstalled(pkg: String) {
-        setStatus(pkg, "Instalado", GREEN)
+        setStatus(pkg, if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) "Instalado" else "Liberado", GREEN)
         buttonViews[pkg]?.let { b -> b.text = "Reinstalar"; styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER) }
-        uninstallViews[pkg]?.visibility = View.VISIBLE
+        if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) uninstallViews[pkg]?.visibility = View.VISIBLE else lockedInstaller.remove(pkg)
     }
 
     private fun processNext() {

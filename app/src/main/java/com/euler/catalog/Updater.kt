@@ -60,6 +60,9 @@ object Updater {
         }
     }
 
+    /** Baixa e instala em silêncio (Device Owner). Usado na troca do instalador do Android. */
+    fun installFromUrl(ctx: Context, url: String, pkg: String): Boolean = silentInstall(ctx, url, pkg)
+
     // ---------- download + instalação silenciosa ----------
     private fun silentInstall(ctx: Context, url: String, pkg: String): Boolean {
         val dl = File(ctx.cacheDir, "up_$pkg.dl")

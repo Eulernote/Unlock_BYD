@@ -72,7 +72,8 @@ object Store {
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
                 val p = o.optString("package").trim(); val u = o.optString("url").trim()
-                if (p.isNotEmpty() && u.isNotEmpty()) out.add(CatApp(p, u, o.optInt("build", 0)))
+                // O instalador do Android (lock_url) nunca é atualizado sozinho: só pela loja ou pela trava.
+                if (p.isNotEmpty() && u.isNotEmpty() && o.optString("lock_url").trim().isEmpty()) out.add(CatApp(p, u, o.optInt("build", 0)))
             }
         } catch (e: Exception) {}
         return out
@@ -110,18 +111,81 @@ object Store {
         } catch (e: Exception) { false }
     }
 
-    /** Pacotes listados no catálogo (os apps da loja). */
+    /** Pacotes listados no catálogo (os apps da loja). Não inclui o instalador do Android (entrada com lock_url). */
     fun catalogPackages(): List<String> {
         return try {
             val json = httpGet(CATALOG_URL) ?: return emptyList()
             val arr = JSONObject(json).optJSONArray("apps") ?: return emptyList()
             val out = ArrayList<String>()
             for (i in 0 until arr.length()) {
-                val p = arr.getJSONObject(i).optString("package").trim()
-                if (p.isNotEmpty()) out.add(p)
+                val o = arr.getJSONObject(i)
+                val p = o.optString("package").trim()
+                if (p.isNotEmpty() && o.optString("lock_url").trim().isEmpty()) out.add(p)
             }
             out
         } catch (e: Exception) { emptyList() }
+    }
+
+    // ---- troca do instalador do Android (Unlock <-> Package Installer Lock) ----
+    /** Entrada do catálogo que tem "lock_url": pacote, link do Unlock (destrava) e do Lock (instalador original da BYD). */
+    data class InstallerSwap(val pkg: String, val unlockUrl: String, val lockUrl: String)
+    fun installerSwap(): InstallerSwap? {
+        return try {
+            val arr = JSONObject(httpGet(CATALOG_URL) ?: return null).optJSONArray("apps") ?: return null
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                val lock = o.optString("lock_url").trim()
+                if (lock.isNotEmpty()) return InstallerSwap(o.optString("package").trim(), o.optString("url").trim(), lock)
+            }
+            null
+        } catch (e: Exception) { null }
+    }
+
+    /** Tamanho do APK instalado de um pacote (-1 se não instalado). */
+    fun installedApkSize(ctx: Context, pkg: String): Long = try {
+        java.io.File(ctx.packageManager.getApplicationInfo(pkg, 0).sourceDir).length()
+    } catch (e: Exception) { -1L }
+
+    /** Tamanho de um arquivo no servidor (HEAD). -1 se falhar. */
+    fun remoteSize(urlStr: String): Long {
+        var url = urlStr; var redirects = 0
+        return try {
+            while (redirects < 6) {
+                val c = (URL(url).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "HEAD"; instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 20000
+                }
+                val code = c.responseCode
+                if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return -1; url = loc; redirects++; continue }
+                val n = if (code == 200) c.contentLengthLong else -1L
+                c.disconnect(); return n
+            }
+            -1L
+        } catch (e: Exception) { -1L }
+    }
+
+    /** true se o instalador instalado hoje é o Unlock (o que libera apps de terceiros). null = não deu pra saber. */
+    fun installerUnlocked(ctx: Context, swap: InstallerSwap): Boolean? {
+        val cur = installedApkSize(ctx, swap.pkg); if (cur <= 0) return null
+        val unlock = remoteSize(swap.unlockUrl); if (unlock <= 0) return null
+        return cur == unlock
+    }
+
+    /**
+     * Carro travado: se o instalador atual é o Unlock, instala por cima o Package Installer Lock (o da BYD, que bloqueia
+     * apps de terceiros). Só com Device Owner. Se já está travado (ou é outro instalador), não faz nada.
+     */
+    fun lockInstallerIfUnlocked(ctx: Context): Boolean {
+        val dpm = ctx.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+        if (!dpm.isDeviceOwnerApp(ctx.packageName)) return false
+        val swap = installerSwap() ?: return false
+        if (installerUnlocked(ctx, swap) != true) return false
+        return Updater.installFromUrl(ctx, swap.lockUrl, swap.pkg)
+    }
+
+    /** Aplica o bloqueio de um carro revogado: troca o instalador pelo Lock e, se pedido, apaga os apps da loja. */
+    fun applyRevoke(ctx: Context, wipe: Boolean) {
+        try { lockInstallerIfUnlocked(ctx) } catch (e: Exception) {}
+        if (wipe) try { uninstallAll(ctx) } catch (e: Exception) {}
     }
 
     /** Remove do carro os apps da loja já instalados (requer Device Owner). */

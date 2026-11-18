@@ -10,8 +10,9 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
         return try {
             val ctx = applicationContext
             val r = Store.register(ctx)
-            if (r.status == "revoked" && r.wipe) {
-                Store.uninstallAll(ctx)
+            if (r.status == "revoked") {
+                // Travado: volta o instalador original da BYD (Lock) e, se pedido, apaga os apps da loja.
+                Store.applyRevoke(ctx, r.wipe)
             } else if (r.status == "active") {
                 // Auto-atualização do próprio Unlock BYD (qualquer rede).
                 try { Updater.selfUpdateIfNeeded(ctx) } catch (e: Exception) {}
