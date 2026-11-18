@@ -165,7 +165,15 @@ class MainActivity : Activity() {
         val logo = ImageView(this); logo.layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
         logo.background = rounded(0xFFFFFFFF.toInt(), 12); logo.setPadding(dp(5), dp(5), dp(5), dp(5)); logo.setImageResource(R.mipmap.ic_launcher)
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(dp(12), 0, 0, 0)
-        col.addView(tv("Unlock BYD", 17f, TEXT, true)); col.addView(tv(subtitle, 12f, MUTED))
+        // Título + versão instalada (ex.: "v15"), para conferir no carro qual versão está rodando.
+        val titleRow = LinearLayout(this); titleRow.orientation = LinearLayout.HORIZONTAL; titleRow.gravity = Gravity.CENTER_VERTICAL
+        titleRow.addView(tv("Unlock BYD", 17f, TEXT, true))
+        val ver = tv("v${ownVersionCode()}", 11f, ACCENT, true).apply {
+            background = rounded(SURFACE2, 99, 1, ACCENT); setPadding(dp(8), dp(2), dp(8), dp(2))
+            val vlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT); vlp.leftMargin = dp(8); layoutParams = vlp
+        }
+        titleRow.addView(ver)
+        col.addView(titleRow); col.addView(tv(subtitle, 12f, MUTED))
         h.addView(logo); h.addView(col); return h
     }
     private fun styleBtn(b: Button, bg: Int, fg: Int) {
