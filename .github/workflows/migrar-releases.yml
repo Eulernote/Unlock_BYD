@@ -1,0 +1,31 @@
+name: migrar-releases
+# Copia (uma vez) todos os arquivos do release "apps" do GitHub para o R2, em apps/<nome>.
+on:
+  workflow_dispatch:
+
+jobs:
+  migrar:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar wrangler
+        run: npm i -g wrangler@4
+
+      - name: Baixar arquivos do release "apps"
+        run: gh release download apps -D rel -R "${{ github.repository }}"
+
+      - name: Enviar para o R2
+        run: |
+          set -e
+          wrangler r2 bucket create unlock-byd || true
+          for f in rel/*; do
+            echo "-> apps/$(basename "$f")"
+            wrangler r2 object put "unlock-byd/apps/$(basename "$f")" --file "$f" --remote
+          done

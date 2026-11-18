@@ -20,8 +20,15 @@ object Store {
 
     // Servidor de ativação (Cloudflare Worker) da Unlock BYD.
     const val SERVER = "https://euler-catalog.eulerfilhogontijodamata.workers.dev"
-    const val CATALOG_URL = "https://raw.githubusercontent.com/Eulernote/Unlock_BYD/main/catalog.json"
-    const val SELF_VERSION_URL = "https://raw.githubusercontent.com/Eulernote/Unlock_BYD/main/app_version.json"
+    // Desde a v13 o catálogo e a versão do app vêm do Worker (arquivos no R2), não mais do GitHub.
+    const val CATALOG_URL = "$SERVER/catalog.json"
+    const val SELF_VERSION_URL = "$SERVER/app_version.json"
+
+    /** versionCode instalado deste app (enviado no heartbeat pro painel). */
+    fun ownVersionCode(ctx: Context): Int = try {
+        val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode.toInt() else @Suppress("DEPRECATION") pi.versionCode
+    } catch (e: Exception) { 0 }
 
     /** Última versão publicada do próprio app (versionCode, url do apk). */
     fun selfVersion(): Pair<Int, String> {
@@ -87,7 +94,8 @@ object Store {
             val grupo = prefs(ctx).getString("grupo", "byd_simples")
             val ask = prefs(ctx).getBoolean("ask", false)
             val extra = if (firstTime) ",\"register\":true,\"grupo\":\"$grupo\",\"ask\":$ask" else ""
-            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra}"
+            val ver = ",\"vc\":${ownVersionCode(ctx)},\"sdk\":${Build.VERSION.SDK_INT}"
+            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$ver}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
             RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"))

@@ -1,0 +1,15 @@
+# Worker do painel/API da Unlock BYD (publicado pelo GitHub Actions: .github/workflows/cloudflare.yml)
+name = "euler-catalog"
+main = "worker/worker.js"
+compatibility_date = "2024-09-23"
+workers_dev = true
+# Mantém variáveis criadas pelo painel do Cloudflare (o SECRET é "secret" e já é mantido).
+keep_vars = true
+
+[[kv_namespaces]]
+binding = "KV"
+id = "b9adb2a62add483b94a5088dac10a9b2"   # UBYD
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "unlock-byd"

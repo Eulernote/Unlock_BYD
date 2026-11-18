@@ -1,0 +1,49 @@
+name: cloudflare
+# Publica o Worker (painel/API) e envia catálogo, ícones e o APK do app para o R2.
+# Precisa dos segredos do repositório: CLOUDFLARE_API_TOKEN e CLOUDFLARE_ACCOUNT_ID.
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'worker/**'
+      - 'wrangler.toml'
+      - 'catalog.json'
+      - 'app_version.json'
+      - 'icons/**'
+      - 'dist/**'
+      - '.github/workflows/cloudflare.yml'
+  workflow_dispatch:
+
+concurrency: cloudflare
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar wrangler
+        run: npm i -g wrangler@4
+
+      - name: Criar bucket R2 (se ainda não existir)
+        run: wrangler r2 bucket create unlock-byd || true
+
+      - name: Publicar Worker
+        run: wrangler deploy
+
+      - name: Enviar APK do app, ícones e catálogo para o R2
+        run: |
+          set -e
+          put(){ wrangler r2 object put "unlock-byd/$1" --file "$2" --remote --content-type "$3"; }
+          # APK primeiro: o app_version.json só aponta pra ele depois que ele já está lá.
+          put app/UnlockBYD.apk dist/UnlockBYD.apk application/vnd.android.package-archive
+          for f in icons/*; do put "icons/$(basename "$f")" "$f" image/png; done
+          put catalog.json catalog.json "application/json; charset=utf-8"
+          put app_version.json app_version.json "application/json; charset=utf-8"

@@ -94,7 +94,8 @@ class MainActivity : Activity() {
     private val TEXT = 0xFFE8ECF3.toInt(); private val MUTED = 0xFF8793A6.toInt()
     private val ACCENT = 0xFF2BB0A6.toInt(); private val GREEN = 0xFF27C08A.toInt(); private val RED = 0xFFEF5350.toInt()
 
-    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList(), val build: Int = 0)
+    private data class AppEntry(val name: String, val pkg: String, val url: String, val icon: String, val desc: String, val plano: String = "basico", val grupos: List<String> = emptyList(), val build: Int = 0,
+                                val extras: List<Extras.Extra> = emptyList(), val tutorial: String = "")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -343,9 +344,11 @@ class MainActivity : Activity() {
     }
 
     private fun appCard(e: AppEntry): LinearLayout {
+        // Cartão externo (vertical): linha do app + tutorial que abre ao tocar no nome.
+        val outer = LinearLayout(this); outer.orientation = LinearLayout.VERTICAL
+        outer.background = rounded(SURFACE, 14, 1, BORDER); outer.setPadding(dp(14), dp(12), dp(14), dp(12))
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); lp.topMargin = dp(10); outer.layoutParams = lp
         val card = LinearLayout(this); card.orientation = LinearLayout.HORIZONTAL; card.gravity = Gravity.CENTER_VERTICAL
-        card.background = rounded(SURFACE, 14, 1, BORDER); card.setPadding(dp(14), dp(12), dp(14), dp(12))
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); lp.topMargin = dp(10); card.layoutParams = lp
 
         val icon = ImageView(this); icon.layoutParams = LinearLayout.LayoutParams(dp(48), dp(48))
         icon.background = rounded(SURFACE2, 12, 1, BORDER); icon.setPadding(dp(8), dp(8), dp(8), dp(8)); setIcon(icon, e)
@@ -354,6 +357,22 @@ class MainActivity : Activity() {
         val ilp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f); ilp.leftMargin = dp(12); ilp.rightMargin = dp(10); info.layoutParams = ilp
         info.addView(tv(e.name, 14.5f, TEXT, true))
         if (e.desc.isNotEmpty()) info.addView(tv(e.desc, 12f, MUTED).apply { setPadding(0, dp(3), 0, 0) })
+        var tutView: TextView? = null
+        if (e.tutorial.isNotEmpty()) {
+            val hint = tv("Toque no nome para ver como instalar ▾", 11.5f, ACCENT, true).apply { setPadding(0, dp(4), 0, 0) }
+            info.addView(hint)
+            val t = tv(e.tutorial, 13f, TEXT).apply {
+                setLineSpacing(dp(3).toFloat(), 1f); visibility = View.GONE
+                background = rounded(SURFACE2, 10, 1, BORDER); setPadding(dp(12), dp(10), dp(12), dp(10))
+                val tlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); tlp.topMargin = dp(10); layoutParams = tlp
+            }
+            tutView = t
+            info.setOnClickListener {
+                val open = t.visibility != View.VISIBLE
+                t.visibility = if (open) View.VISIBLE else View.GONE
+                hint.text = if (open) "Ocultar instruções ▴" else "Toque no nome para ver como instalar ▾"
+            }
+        }
         val inst = isInstalled(e.pkg)
         val st = tv(if (inst) "Instalado" else "Disponível", 11f, if (inst) GREEN else MUTED).apply { setPadding(0, dp(4), 0, 0) }
         statusViews[e.pkg] = st
@@ -365,7 +384,9 @@ class MainActivity : Activity() {
         btn.setOnClickListener { enqueue(e) }
         buttonViews[e.pkg] = btn
 
-        card.addView(icon); card.addView(info); card.addView(btn); return card
+        card.addView(icon); card.addView(info); card.addView(btn)
+        outer.addView(card); tutView?.let { outer.addView(it) }
+        return outer
     }
 
     private fun setIcon(iv: ImageView, e: AppEntry) {
@@ -399,7 +420,8 @@ class MainActivity : Activity() {
             if (n.isNotEmpty() && p.isNotEmpty() && u.isNotEmpty()) {
                 val g = ArrayList<String>()
                 o.optJSONArray("grupos")?.let { for (k in 0 until it.length()) { val v = it.optString(k).trim().lowercase(); if (v.isNotEmpty()) g.add(v) } }
-                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g, o.optInt("build", 0)))
+                out.add(AppEntry(n, p, u, o.optString("icon").trim(), o.optString("desc").trim(), o.optString("plano", "basico").trim().ifEmpty { "basico" }, g, o.optInt("build", 0),
+                    Extras.parse(o), o.optString("tutorial").trim()))
             }
         }
         return out
@@ -458,9 +480,21 @@ class MainActivity : Activity() {
         installing = true; current = e
         setStatus(e.pkg, "Baixando…  0%", MUTED)
         Thread {
+            // 1) Arquivos extras (ex.: discos) — vão para Download/<pasta>/ antes do APK.
+            val steps = e.extras.size + 1
+            for ((idx, ex) in e.extras.withIndex()) {
+                val tag = "(${idx + 1}/$steps) ${ex.nome}"
+                runOnUiThread { setStatus(e.pkg, "Baixando $tag…", MUTED) }
+                val okx = try { Extras.fetch(applicationContext, ex) { pct, bytes -> runOnUiThread {
+                    setStatus(e.pkg, if (pct >= 0) "Baixando $tag…  $pct%" else "Baixando $tag…  ${bytes / 1_000_000} MB", MUTED)
+                } } } catch (x: Exception) { false }
+                if (!okx) { runOnUiThread { setStatus(e.pkg, "Falha ao baixar ${ex.nome}", RED); current = null; processNext() }; return@Thread }
+            }
+            // 2) APK
+            val pre = if (steps > 1) "($steps/$steps) " else ""
             val dl = File(cacheDir, e.pkg + ".dl")
             val ok = try { download(e.url, dl) { pct, bytes -> runOnUiThread {
-                setStatus(e.pkg, if (pct >= 0) "Baixando…  $pct%" else "Baixando…  ${bytes / 1_000_000} MB", MUTED)
+                setStatus(e.pkg, if (pct >= 0) "Baixando ${pre}APK…  $pct%" else "Baixando ${pre}APK…  ${bytes / 1_000_000} MB", MUTED)
             } } } catch (ex: Exception) { false }
             if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); current = null; processNext() }; return@Thread }
             val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
