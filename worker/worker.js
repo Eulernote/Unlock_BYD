@@ -471,7 +471,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .fbtn:hover{color:var(--text)}.fbtn.del:hover{color:var(--red);border-color:var(--red)}
 .ftabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
 .ftabs .chip .ct{opacity:.7;font-weight:700;margin-left:4px}
-.fgrp{font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--accent);font-weight:700;margin:14px 0 2px}
+.fgrp{font-size:12px;letter-spacing:.2px;color:var(--accent);font-weight:700;margin:14px 0 2px}
 .fnote{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:var(--muted);line-height:1.5}
 .crow{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
 .crow:last-child{border-bottom:none}
