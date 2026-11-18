@@ -296,7 +296,7 @@ async function handle(request, env){
     }
 
     // --- arquivos no R2 (só FILE_ADMINS) ---
-    if(p.indexOf('/api/files') === 0){
+    if(p.indexOf('/api/files') === 0 || p === '/api/catalog'){
       if(!user) return json({error:'unauth'}, 401);
       if(FILE_ADMINS.indexOf(user) < 0) return json({error:'forbidden'}, 403);
       if(!env.FILES) return json({error:'R2 não configurado'}, 503);
@@ -310,6 +310,33 @@ async function handle(request, env){
         }while(cursor && n < 10);
         out.sort(function(a,b){ return a.key < b.key ? -1 : 1; });
         return json({files: out});
+      }
+      // Catálogo da loja (catalog.json no R2), editado pela aba "Loja".
+      if(p === '/api/catalog' && request.method === 'GET'){
+        const o = await env.FILES.get('catalog.json');
+        if(!o) return json({catalog:{apps:[]}, etag:null});
+        let cat; try{ cat = JSON.parse(await o.text()); }catch(e){ return json({error:'catalog.json inválido no R2'}, 500); }
+        return json({catalog: cat, etag: o.httpEtag});
+      }
+      if(p === '/api/catalog' && request.method === 'PUT'){
+        const b = await request.json().catch(()=>null);
+        if(!b || !b.catalog || !Array.isArray(b.catalog.apps)) return json({error:'catálogo inválido'}, 400);
+        const seen = {};
+        for(const a of b.catalog.apps){
+          if(!a || !String(a.name||'').trim() || !String(a.package||'').trim() || !String(a.url||'').trim()) return json({error:'todo app precisa de nome, pacote e APK'}, 400);
+          if(seen[a.package]) return json({error:'pacote repetido: '+a.package}, 400);
+          seen[a.package] = 1;
+        }
+        const text = JSON.stringify(b.catalog, null, 2);
+        if(text.length > 1000000) return json({error:'catálogo grande demais'}, 400);
+        const cur = await env.FILES.get('catalog.json');
+        if(cur){
+          if(b.etag && cur.httpEtag !== b.etag) return json({error:'conflict'}, 409);   // alguém salvou antes
+          await env.FILES.put('backups/catalog-' + new Date().toISOString().replace(/[:.]/g,'-') + '-' + user + '.json', await cur.text(),
+            {httpMetadata:{contentType:'application/json; charset=utf-8'}});
+        }
+        const o = await env.FILES.put('catalog.json', text, {httpMetadata:{contentType:'application/json; charset=utf-8'}});
+        return json({ok:true, etag: o.httpEtag});
       }
       if(p === '/api/files/delete' && request.method === 'POST'){
         const b = await request.json().catch(()=>({}));
@@ -446,6 +473,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .ftabs .chip .ct{opacity:.7;font-weight:700;margin-left:4px}
 .fgrp{font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--accent);font-weight:700;margin:14px 0 2px}
 .fnote{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:var(--muted);line-height:1.5}
+.crow{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
+.crow:last-child{border-bottom:none}
+.crow img,.cicon{width:36px;height:36px;border-radius:9px;background:var(--surface2);border:1px solid var(--border);object-fit:contain;flex-shrink:0}
+.crow .cn{flex:1;min-width:0}.crow .cn b{font-size:14px}.crow .cn div{font-size:11.5px;color:var(--faint);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.cf label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px;font-weight:600}
+.cf input[type=text],.cf textarea,.cf select{width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:10px 11px;border-radius:9px;font-size:13.5px;font-family:inherit}
+.cf textarea{min-height:110px;resize:vertical}
+.cf .hint{font-size:11.5px;color:var(--faint);margin-top:4px}
+.cf .row2{display:flex;gap:10px;flex-wrap:wrap}.cf .row2>div{flex:1;min-width:180px}
+.cf .chk{display:inline-flex;align-items:center;gap:6px;margin:0 14px 6px 0;font-size:13px;color:var(--text);font-weight:500}
+.cf .box{background:var(--bg2);border:1px solid var(--border);border-radius:11px;padding:12px;margin-top:4px}
 .upbox{background:var(--bg2);border:1px dashed var(--border2);border-radius:12px;padding:14px;margin-bottom:14px}
 .upbox select,.upbox input[type=text]{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:9px;font-size:13px}
 .bar{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;margin-top:10px;display:none}
@@ -473,7 +511,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div class="wrap">
 <div class="topbar"><div class="logo"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04201d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
 <div><h1>Painel de Ativação</h1><span>Unlock BYD</span></div></div><div class="spacer"></div>
-<div class="userbox"><button class="btn-ghost" id="files-btn" style="display:none" onclick="openFiles()">Arquivos</button><div class="av" id="whoav"></div><div class="nm" id="whoami"></div><button class="btn-ghost" onclick="logout()">Sair</button></div></div>
+<div class="userbox"><button class="btn-ghost" id="cat-btn" style="display:none" onclick="openCat()">Loja</button><button class="btn-ghost" id="files-btn" style="display:none" onclick="openFiles()">Arquivos</button><div class="av" id="whoav"></div><div class="nm" id="whoami"></div><button class="btn-ghost" onclick="logout()">Sair</button></div></div>
 <div class="stats"><div class="stat"><div class="n" id="s-total">0</div><div class="l">Veículos</div></div>
 <div class="stat pend"><div class="n" id="s-pend">0</div><div class="l">Pendentes</div></div>
 <div class="stat act"><div class="n" id="s-act">0</div><div class="l">Ativos</div></div>
@@ -509,6 +547,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div class="bar" id="up-bar"><div></div></div></div>
 <input type="text" id="f-q" placeholder="Filtrar arquivos..." oninput="renderFiles()" style="width:100%;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:9px 11px;border-radius:9px;font-size:13px;margin-bottom:6px">
 <div id="f-list"><div class="empty">Carregando…</div></div></div></div>
+<div id="cat" class="modal-ov" style="display:none"><div class="modal wide"><div class="mtop" style="margin-bottom:12px">
+<div style="flex:1"><h3 id="cat-title">Loja (catálogo)</h3><p class="sub" id="cat-sub">Apps que aparecem na loja dos carros. Salvou, já vale pros carros.</p></div><button class="modal-x" onclick="closeCat()">✕ Fechar</button></div>
+<div id="cat-body"><div class="empty">Carregando…</div></div>
+<div id="cat-msg" style="font-size:12.5px;color:var(--muted);margin-top:10px"></div><div class="bar" id="cat-bar"><div></div></div></div></div>
 <div id="toast"></div>
 <script>
 var TOKEN=null,currentUser=null,cars=[],filter="all",revokeTarget=null,latest=0,canFiles=false,files=[],uploading=false;
@@ -557,7 +599,7 @@ function render(){var q=(document.getElementById('q').value||"").toLowerCase();
  var old=cars.filter(isOld).length;document.getElementById('s-old').textContent=latest?old:'—';
  document.getElementById('s-old-l').textContent=latest?('Abaixo da v'+latest):'Desatualizados';
  document.getElementById('s-old-box').className='stat old'+(latest&&!old?' ok':'');}
-function loadCars(){api('/api/cars').then(function(res){cars=res.cars||[];latest=res.latest||0;canFiles=!!res.files;document.getElementById('files-btn').style.display=canFiles?'':'none';if(res.me){currentUser=res.me;setWho();}render();}).catch(function(){});}
+function loadCars(){api('/api/cars').then(function(res){cars=res.cars||[];latest=res.latest||0;canFiles=!!res.files;document.getElementById('files-btn').style.display=canFiles?'':'none';document.getElementById('cat-btn').style.display=canFiles?'':'none';if(res.me){currentUser=res.me;setWho();}render();}).catch(function(){});}
 function approve(id){api('/api/approve',{method:'POST',body:{id:id}}).then(function(){toast("✓ Ativado");loadCars();}).catch(function(){});}
 function openRevoke(id){revokeTarget=id;var c=cars.filter(function(x){return x.id===id;})[0];
  document.getElementById('modal-sub').textContent='Veículo: '+c.nome+'  ('+c.id+')';
@@ -636,7 +678,7 @@ function renderFiles(){var q=(document.getElementById('f-q').value||'').toLowerC
  document.getElementById('up-title').textContent='Enviar para '+info[1]+(info[3]?' — '+info[3]:'');
  var note=document.getElementById('f-note');
  if(managed){note.style.display='block';note.innerHTML=fTab==='app'?'O APK do Unlock BYD e o <b>app_version.json</b> são publicados automaticamente pelo GitHub (pasta <b>dist/</b> e arquivo <b>app_version.json</b> do repositório). Não envie por aqui.'
-  :'O <b>catalog.json</b> é publicado automaticamente pelo GitHub a partir do arquivo do repositório. Edite lá, não por aqui.';}else note.style.display='none';
+  :'O <b>catalog.json</b> é editado pela aba <b>Loja</b> do painel (cada salvamento guarda uma cópia em <b>backups/</b>). Não envie por aqui.';}else note.style.display='none';
  var all=files.filter(function(f){return tabOf(f.key)===fTab;});
  var rows=all.filter(function(f){return !q||f.key.toLowerCase().indexOf(q)>=0;});
  var total=all.reduce(function(a,f){return a+f.size;},0);
@@ -651,8 +693,9 @@ function renderFiles(){var q=(document.getElementById('f-q').value||'').toLowerC
 function copyLink(k){var u=fileUrl(k);try{navigator.clipboard.writeText(u).then(function(){toast('Link copiado');},function(){prompt('Copie o link:',u);});}catch(e){prompt('Copie o link:',u);}}
 function delFile(k){if(!confirm('Excluir "'+k+'" do R2?\\n\\nCarros que ainda apontam para este arquivo não vão conseguir baixá-lo.'))return;
  api('/api/files/delete',{method:'POST',body:{key:k}}).then(function(){toast('Arquivo excluído');loadFiles();}).catch(function(){});}
-function upMsg(t){document.getElementById('up-msg').textContent=t;}
-function upBar(p){var b=document.getElementById('up-bar');b.style.display=p==null?'none':'block';b.firstChild.style.width=(p||0)+'%';}
+var upTarget='up';
+function upMsg(t){document.getElementById(upTarget+'-msg').textContent=t;}
+function upBar(p){var b=document.getElementById(upTarget+'-bar');b.style.display=p==null?'none':'block';b.firstChild.style.width=(p||0)+'%';}
 var pendingUp=null; // envio interrompido que pode ser retomado {key,uploadId,parts,size,name}
 function putPart(key,uploadId,n,blob){return fetch('/api/files/mpu/part?key='+encodeURIComponent(key)+'&uploadId='+encodeURIComponent(uploadId)+'&n='+n,{method:'PUT',headers:{'Authorization':'Bearer '+TOKEN},body:blob})
  .then(function(r){if(r.status===401){var e=new Error('sessão expirada');e.unauth=true;throw e;}if(!r.ok)throw new Error('parte '+n+' falhou ('+r.status+')');grabToken(r);return r.json();});}
@@ -685,6 +728,137 @@ function startUpload(){if(uploading)return;var inp=document.getElementById('up-f
  .catch(function(e){upMsg('✕ Falha no envio: '+(e&&e.message?e.message:e));})
  .then(function(){uploading=false;document.getElementById('up-go').disabled=false;upBar(null);loadFiles();});}
 window.addEventListener('beforeunload',function(e){if(uploading){e.preventDefault();e.returnValue='';}});
+/* ---------- aba Loja (catálogo) ---------- */
+var CAT=null,CAT_ETAG=null,catEditIdx=-1,catSaving=false;
+var GRUPOS=[['byd_simples','BYD Simples'],['byd_google','BYD Google'],['chery','Chery'],['geely','Geely']];
+var PLANOS=[['basico','Básico'],['intermediario','Intermediário'],['premium','Premium']];
+function catMsg(t){document.getElementById('cat-msg').textContent=t||'';}
+function openCat(){document.getElementById('cat').style.display='flex';catMsg('');catLoad();}
+function closeCat(){if(catSaving&&!confirm('Há um envio em andamento. Fechar mesmo assim?'))return;document.getElementById('cat').style.display='none';}
+function catLoad(){document.getElementById('cat-body').innerHTML='<div class="empty">Carregando…</div>';
+ return api('/api/catalog').then(function(r){if(r.error)throw new Error(r.error);CAT=r.catalog||{apps:[]};if(!CAT.apps)CAT.apps=[];CAT_ETAG=r.etag;catList();}).catch(function(e){document.getElementById('cat-body').innerHTML='<div class="empty">Não consegui carregar o catálogo: '+esc(e.message||e)+'</div>';});}
+function catSave(){return api('/api/catalog',{method:'PUT',body:{catalog:CAT,etag:CAT_ETAG}}).then(function(r){
+  if(r.error==='conflict')throw new Error('outra pessoa salvou o catálogo agora há pouco. Abra a Loja de novo e refaça a alteração.');
+  if(r.error)throw new Error(r.error);CAT_ETAG=r.etag;return r;});}
+function keyUrl(k){return location.origin+'/f/'+k.split('/').map(encodeURIComponent).join('/');}
+function urlKey(u){var i=(u||'').indexOf('/f/');if(i<0)return '';try{return decodeURIComponent(u.slice(i+3));}catch(e){return '';}}
+function catList(){document.getElementById('cat-title').textContent='Loja (catálogo)';catEditIdx=-1;
+ var apps=CAT.apps;var h='<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn btn-approve" onclick="catEdit(-1)">+ Novo app</button>'
+  +'<input type="text" id="cat-q" placeholder="Filtrar..." oninput="catRows()" style="flex:1;min-width:150px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:9px 11px;border-radius:9px;font-size:13px"></div><div id="cat-rows"></div>';
+ document.getElementById('cat-body').innerHTML=h;catRows();}
+function catRows(){var q=((document.getElementById('cat-q')||{}).value||'').toLowerCase();var apps=CAT.apps;var h='<div style="font-size:12px;color:var(--faint);margin:6px 0">'+apps.length+' apps na loja</div>';
+ apps.forEach(function(a,i){if(q&&(a.name+' '+a.package).toLowerCase().indexOf(q)<0)return;
+  var gs=(a.grupos||[]).map(function(g){return grupoBadge(g);}).join(' ');
+  h+='<div class="crow">'+(a.icon?'<img src="'+esc(a.icon)+'" alt="">':'<div class="cicon"></div>')
+   +'<div class="cn"><b>'+esc(a.name)+'</b><div>'+planBadge(a.plano||'basico')+' '+gs+' <span>build '+(a.build||0)+'</span>'+((a.extras&&a.extras.length)?' <span>· '+a.extras.length+' extra(s)</span>':'')+(a.tutorial?' <span>· tutorial</span>':'')+(a.lock_url?' <span>· instalador do Android</span>':'')+'</div></div>'
+   +'<button class="fbtn" onclick="catMove('+i+',-1)" title="Subir">↑</button><button class="fbtn" onclick="catMove('+i+',1)" title="Descer">↓</button>'
+   +'<button class="fbtn" onclick="catEdit('+i+')">Editar</button><button class="fbtn del" onclick="catDel('+i+')">Excluir</button></div>';});
+ document.getElementById('cat-rows').innerHTML=h;}
+function catMove(i,d){var j=i+d;var a=CAT.apps;if(j<0||j>=a.length)return;var t=a[i];a[i]=a[j];a[j]=t;catRows();
+ catSave().then(function(){toast('Ordem salva');}).catch(function(e){toast('Falhou: '+e.message);catLoad();});}
+function catDel(i){var a=CAT.apps[i];if(!confirm('Tirar "'+a.name+'" da loja?\\n\\nOs carros que já instalaram continuam com ele. Os arquivos continuam na aba Arquivos.'))return;
+ CAT.apps.splice(i,1);catSave().then(function(){toast('Removido da loja');catRows();}).catch(function(e){toast('Falhou: '+e.message);catLoad();});}
+function catEdit(i){catEditIdx=i;var a=i>=0?CAT.apps[i]:{name:'',package:'',url:'',icon:'',desc:'',plano:'basico',grupos:['byd_simples','byd_google','chery','geely'],build:1,extras:[],tutorial:''};
+ document.getElementById('cat-title').textContent=i>=0?('Editar: '+a.name):'Novo app';catMsg('');
+ var gr=a.grupos||[];var ex=a.extras||[];
+ var h='<div class="cf">';
+ if(a.lock_url)h+='<div class="fnote">Este é o <b>instalador do Android</b> (Unlock). Ao travar um carro, ele é trocado automaticamente pelo instalador da BYD. Pode editar nome, descrição, plano e grupos.</div>';
+ h+='<label>Arquivo do app (APK / XAPK)</label><div class="box">'+(a.url?'<div class="hint" style="margin:0 0 8px">Atual: <b>'+esc(urlKey(a.url)||a.url)+'</b> — envie outro só se for trocar a versão.</div>':'')
+  +'<input type="file" id="cf-apk" accept=".apk,.xapk,.apks" onchange="catPickApk()" style="font-size:12.5px;color:var(--muted)"><div class="hint" id="cf-apk-info"></div></div>';
+ h+='<div class="row2"><div><label>Nome na loja *</label><input type="text" id="cf-name" value="'+esc(a.name)+'"></div>'
+  +'<div><label>Pacote *</label><input type="text" id="cf-pkg" value="'+esc(a.package)+'" placeholder="preenchido sozinho ao escolher o APK"'+(i>=0?' readonly style="opacity:.7"':'')+'></div></div>';
+ h+='<label>Descrição</label><input type="text" id="cf-desc" value="'+esc(a.desc||'')+'">';
+ h+='<div class="row2"><div><label>Plano</label><select id="cf-plano">'+PLANOS.map(function(p){return '<option value="'+p[0]+'"'+((a.plano||'basico')===p[0]?' selected':'')+'>'+p[1]+'</option>';}).join('')+'</select></div>'
+  +'<div><label>Grupos (quais carros veem)</label><div style="padding-top:6px">'+GRUPOS.map(function(g){return '<span class="chk"><input type="checkbox" class="cf-g" value="'+g[0]+'"'+(gr.indexOf(g[0])>=0?' checked':'')+'>'+g[1]+'</span>';}).join('')+'</div></div></div>';
+ h+='<label>Ícone (PNG)</label><div class="box" style="display:flex;gap:12px;align-items:center">'+(a.icon?'<img class="cicon" src="'+esc(a.icon)+'" alt="">':'<div class="cicon"></div>')
+  +'<input type="file" id="cf-icon" accept="image/png,image/jpeg,image/webp" style="font-size:12.5px;color:var(--muted)"></div>';
+ h+='<label>Arquivos extras (discos etc. — vão para a pasta Download do carro)</label><div class="box">';
+ if(ex.length){h+=ex.map(function(x,k){return '<div class="frow"><div class="fk">'+esc(x.nome)+' <span style="color:var(--faint)">→ Download/'+esc(x.pasta||'')+'</span></div><span class="chk" style="margin:0"><input type="checkbox" class="cf-exdel" value="'+k+'">remover</span></div>';}).join('');}
+ else h+='<div class="hint" style="margin:0 0 6px">Nenhum.</div>';
+ h+='<div style="margin-top:8px"><input type="file" id="cf-extras" multiple style="font-size:12.5px;color:var(--muted)"></div>'
+  +'<input type="text" id="cf-pasta" placeholder="Pasta dentro de Download (ex.: Resident Evil 4)" value="'+esc((ex[0]&&ex[0].pasta)||a.name||'')+'" style="margin-top:8px">'
+  +'<div class="hint">Os novos arquivos são baixados no carro antes do APK, para Download/&lt;pasta&gt;/.</div></div>';
+ h+='<label>Tutorial (aparece ao tocar no nome do app)</label><textarea id="cf-tut" placeholder="Opcional — para jogos com instalação mais complexa">'+esc(a.tutorial||'')+'</textarea>';
+ h+='<div style="display:flex;gap:8px;margin-top:16px"><button class="btn btn-approve" id="cf-save" style="flex:1" onclick="catSubmit()">Salvar na loja</button><button class="btn" style="background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="catList()">Cancelar</button></div></div>';
+ document.getElementById('cat-body').innerHTML=h;
+ if(i<0){var nm=document.getElementById('cf-name');nm.addEventListener('input',function(){var pa=document.getElementById('cf-pasta');if(!pa.dataset.touched)pa.value=nm.value;});
+  document.getElementById('cf-pasta').addEventListener('input',function(){this.dataset.touched='1';});}}
+function catPickApk(){var f=document.getElementById('cf-apk').files[0];var info=document.getElementById('cf-apk-info');if(!f){info.textContent='';return;}
+ info.textContent='Lendo o pacote…';apkInfo(f).then(function(m){
+  if(!m||!m.pkg){info.textContent='Não consegui ler o pacote deste arquivo — digite o pacote manualmente.';return;}
+  var pk=document.getElementById('cf-pkg');
+  if(catEditIdx>=0&&pk.value&&pk.value!==m.pkg){info.innerHTML='<span style="color:var(--red)">Atenção: este arquivo é do pacote <b>'+esc(m.pkg)+'</b>, mas o app é <b>'+esc(pk.value)+'</b>.</span>';return;}
+  pk.value=m.pkg;var nm=document.getElementById('cf-name');if(!nm.value&&m.label){nm.value=m.label;nm.dispatchEvent(new Event('input'));}
+  info.textContent='Pacote '+m.pkg+(m.ver?(' · versão '+m.ver):'')+' · '+fmtSize(f.size);}).catch(function(){info.textContent='Não consegui ler o pacote — digite manualmente.';});}
+function catSubmit(){if(catSaving)return;
+ var orig=catEditIdx>=0?CAT.apps[catEditIdx]:null;
+ var name=document.getElementById('cf-name').value.trim();var pkg=document.getElementById('cf-pkg').value.trim();
+ var apk=document.getElementById('cf-apk').files[0];var icon=document.getElementById('cf-icon').files[0];
+ var exFiles=Array.prototype.slice.call(document.getElementById('cf-extras').files||[]);var pasta=document.getElementById('cf-pasta').value.trim().replace(/^\\/+|\\/+$/g,'');
+ var grupos=Array.prototype.slice.call(document.querySelectorAll('.cf-g')).filter(function(c){return c.checked;}).map(function(c){return c.value;});
+ if(!name){toast('Digite o nome do app');return;}
+ if(!pkg||!/^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$/.test(pkg)){toast('Pacote inválido (ex.: com.empresa.app)');return;}
+ if(!orig&&!apk){toast('Escolha o APK do app');return;}
+ if(!grupos.length){toast('Marque pelo menos um grupo');return;}
+ if(exFiles.length&&!pasta){toast('Digite a pasta dos extras dentro de Download');return;}
+ if(!orig&&CAT.apps.some(function(a){return a.package===pkg;})){toast('Esse pacote já está na loja — use Editar');return;}
+ var entry=JSON.parse(JSON.stringify(orig||{}));
+ entry.name=name;entry.package=pkg;entry.desc=document.getElementById('cf-desc').value.trim();entry.plano=document.getElementById('cf-plano').value;entry.grupos=grupos;
+ var tut=document.getElementById('cf-tut').value.replace(/\\r/g,'').trim();if(tut)entry.tutorial=tut;else delete entry.tutorial;
+ var dels=Array.prototype.slice.call(document.querySelectorAll('.cf-exdel')).filter(function(c){return c.checked;}).map(function(c){return +c.value;});
+ var extras=(entry.extras||[]).filter(function(x,k){return dels.indexOf(k)<0;});
+ var jobs=[];
+ if(apk)jobs.push({file:apk,key:'apps/'+apk.name,set:function(u){entry.url=u;entry.build=(orig?(parseInt(orig.build)||0)+1:1);}});
+ if(icon){var ext=(icon.name.split('.').pop()||'png').toLowerCase();jobs.push({file:icon,key:'icons/'+pkg+'.'+ext,set:function(u){entry.icon=u+'?v='+Date.now();}});}
+ exFiles.forEach(function(f){jobs.push({file:f,key:'extras/'+pkg+'/'+f.name,set:function(u){extras=extras.filter(function(x){return !(x.nome===f.name&&(x.pasta||'')===pasta);});extras.push({url:u,pasta:pasta,nome:f.name});}});});
+ catSaving=true;document.getElementById('cf-save').disabled=true;upTarget='cat';upBar(0);
+ var k=0;function nextJob(){if(k>=jobs.length)return Promise.resolve();var j=jobs[k++];
+  return uploadOne(j.file,j.key,k,jobs.length).then(function(){j.set(keyUrl(j.key));return nextJob();});}
+ nextJob().then(function(){
+   if(extras.length)entry.extras=extras;else delete entry.extras;
+   if(!entry.build)entry.build=1;
+   if(orig)CAT.apps[catEditIdx]=entry;else CAT.apps.push(entry);
+   catMsg('Salvando o catálogo…');return catSave();})
+ .then(function(){toast('✓ '+name+' salvo na loja');catMsg('✓ Salvo. Os carros já veem a mudança ao atualizar a loja.');catList();})
+ .catch(function(e){catMsg('✕ '+(e&&e.message?e.message:e));if(orig)CAT.apps[catEditIdx]=orig;})
+ .then(function(){catSaving=false;upTarget='up';var b=document.getElementById('cf-save');if(b)b.disabled=false;upBar(null);upTarget='cat';upBar(null);upTarget='up';});}
+/* leitura do pacote de um APK/XAPK direto no navegador (sem enviar nada) */
+function u16(dv,o){return dv.getUint16(o,true);}function u32(dv,o){return dv.getUint32(o,true);}
+function u64(dv,o){return dv.getUint32(o,true)+dv.getUint32(o+4,true)*4294967296;}
+function zipEntry(file,want){var tailLen=Math.min(file.size,65557);
+ return file.slice(file.size-tailLen).arrayBuffer().then(function(tb){var dv=new DataView(tb);var e=-1;
+  for(var i=tb.byteLength-22;i>=0;i--){if(u32(dv,i)===0x06054b50){e=i;break;}}if(e<0)throw new Error('zip');
+  var cdSize=u32(dv,e+12),cdOff=u32(dv,e+16);var pre;
+  if(cdOff===0xffffffff||cdSize===0xffffffff){var loc=e-20;if(loc<0||u32(dv,loc)!==0x07064b50)throw new Error('zip64');var z64=u64(dv,loc+8);
+   pre=file.slice(z64,z64+56).arrayBuffer().then(function(b){var d=new DataView(b);return [u64(d,40),u64(d,48)];});}
+  else pre=Promise.resolve([cdSize,cdOff]);
+  return pre;}).then(function(cd){return file.slice(cd[1],cd[1]+cd[0]).arrayBuffer();}).then(function(cb){var dv=new DataView(cb);var o=0;var dec=new TextDecoder();
+  while(o+46<=cb.byteLength&&u32(dv,o)===0x02014b50){var method=u16(dv,o+10),comp=u32(dv,o+20),unc=u32(dv,o+24),nl=u16(dv,o+28),el=u16(dv,o+30),cl=u16(dv,o+32),lo=u32(dv,o+42);
+   var name=dec.decode(new Uint8Array(cb,o+46,nl));
+   if(name===want){var x=o+46+nl,xe=x+el;while(x+4<=xe){var id=u16(dv,x),sz=u16(dv,x+2),q=x+4;if(id===1){if(unc===0xffffffff){unc=u64(dv,q);q+=8;}if(comp===0xffffffff){comp=u64(dv,q);q+=8;}if(lo===0xffffffff){lo=u64(dv,q);}}x+=4+sz;}
+    return {method:method,comp:comp,lo:lo};}
+   o+=46+nl+el+cl;}return null;}).then(function(en){if(!en)return null;
+  return file.slice(en.lo,en.lo+30).arrayBuffer().then(function(lb){var d=new DataView(lb);var start=en.lo+30+u16(d,26)+u16(d,28);var blob=file.slice(start,start+en.comp);
+   if(en.method===0)return blob.arrayBuffer();
+   if(en.method===8&&typeof DecompressionStream!=='undefined')return new Response(blob.stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer();
+   return null;});});}
+function axmlInfo(buf){var dv=new DataView(buf);if(u16(dv,0)!==3)return null;var o=u16(dv,2);var strs=[];var end=Math.min(u32(dv,4),buf.byteLength);var res={};
+ function str(i){return (i>=0&&i<strs.length)?strs[i]:null;}
+ while(o+8<=end){var type=u16(dv,o),hs=u16(dv,o+2),size=u32(dv,o+4);if(!size)break;
+  if(type===1){var cnt=u32(dv,o+8),flags=u32(dv,o+16),sStart=u32(dv,o+20);var utf8=(flags&0x100)!==0;
+   for(var i=0;i<cnt;i++){var so=o+sStart+u32(dv,o+hs+i*4);try{
+    if(utf8){var a=dv.getUint8(so);so+=(a&0x80)?2:1;var bl=dv.getUint8(so);if(bl&0x80){bl=((bl&0x7f)<<8)|dv.getUint8(so+1);so+=2;}else so+=1;strs.push(new TextDecoder().decode(new Uint8Array(buf,so,bl)));}
+    else{var l=u16(dv,so);so+=2;if(l&0x8000){l=((l&0x7fff)<<16)|u16(dv,so);so+=2;}var t='';for(var c=0;c<l;c++)t+=String.fromCharCode(u16(dv,so+c*2));strs.push(t);}
+   }catch(e){strs.push('');}}}
+  else if(type===0x0102){var ext=o+hs;var en=str(u32(dv,ext+4));if(en==='manifest'){var as=u16(dv,ext+8),az=u16(dv,ext+10),ac=u16(dv,ext+12);
+    for(var k=0;k<ac;k++){var ao=ext+as+k*az;var an=str(u32(dv,ao+4)),raw=u32(dv,ao+8),dt=dv.getUint8(ao+15),data=u32(dv,ao+16);
+     if(an==='package')res.pkg=str(raw);else if(an==='versionName')res.ver=raw!==0xffffffff?str(raw):'';else if(an==='versionCode'&&dt>=16)res.code=data;}
+    return res;}}
+  o+=size;}return res.pkg?res:null;}
+function apkInfo(file){var low=file.name.toLowerCase();
+ if(low.endsWith('.xapk')||low.endsWith('.apks')){return zipEntry(file,'manifest.json').then(function(b){if(!b)return zipEntry(file,'info.json');return b;}).then(function(b){if(!b)return null;
+   var j=JSON.parse(new TextDecoder().decode(b));return {pkg:j.package_name||j.pname||j.packageName,label:j.name||j.label||'',ver:j.version_name||j.versionName||''};});}
+ return zipEntry(file,'AndroidManifest.xml').then(function(b){return b?axmlInfo(b):null;});}
 var tTimer;function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('show');clearTimeout(tTimer);tTimer=setTimeout(function(){t.classList.remove('show');},2600);}
 function setWho(){var av=document.getElementById('whoav');av.textContent=(currentUser||'?').charAt(0);av.style.background=userColor(currentUser);document.getElementById('whoami').textContent=currentUser||'';}
 function doLogin(e){e.preventDefault();var u=(document.getElementById('lu').value||'').trim();var p=document.getElementById('lp').value||'';var err=document.getElementById('login-err');err.textContent='';

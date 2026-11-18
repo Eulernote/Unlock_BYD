@@ -1,5 +1,6 @@
 name: cloudflare
-# Publica o Worker (painel/API) e envia catálogo, ícones e o APK do app para o R2.
+# Publica o Worker (painel/API) e envia ícones e o APK do app para o R2.
+# O catalog.json NÃO é mais enviado daqui: desde a aba "Loja" do painel, o catálogo vive no R2.
 # Precisa dos segredos do repositório: CLOUDFLARE_API_TOKEN e CLOUDFLARE_ACCOUNT_ID.
 on:
   push:
@@ -7,7 +8,6 @@ on:
     paths:
       - 'worker/**'
       - 'wrangler.toml'
-      - 'catalog.json'
       - 'app_version.json'
       - 'icons/**'
       - 'dist/**'
@@ -38,14 +38,13 @@ jobs:
       - name: Publicar Worker
         run: wrangler deploy
 
-      - name: Enviar APK do app, ícones e catálogo para o R2
+      - name: Enviar APK do app e ícones para o R2
         run: |
           set -e
           put(){ wrangler r2 object put "unlock-byd/$1" --file "$2" --remote --content-type "$3"; }
           # APK primeiro: o app_version.json só aponta pra ele depois que ele já está lá.
           put app/Unlock_BYD.apk dist/Unlock_BYD.apk application/vnd.android.package-archive
           for f in icons/*; do put "icons/$(basename "$f")" "$f" image/png; done
-          put catalog.json catalog.json "application/json; charset=utf-8"
           put app_version.json app_version.json "application/json; charset=utf-8"
           # Nome antigo do APK (antes de padronizar para Unlock_BYD.apk) — não é mais usado.
           wrangler r2 object delete unlock-byd/app/UnlockBYD.apk --remote || true
