@@ -132,6 +132,17 @@ async function serveR2(env, key, request){
 /* ---------- handler ---------- */
 export default {
   async fetch(request, env){
+    let res = await handle(request, env);
+    // Sessão deslizante: toda resposta autenticada devolve um token renovado (12h a partir de agora).
+    if(env.SECRET && request.headers.get('Authorization')){
+      const u = await authUser(env, request);
+      if(u){ res = new Response(res.body, res); res.headers.set('X-Token', await makeToken(env.SECRET, u)); }
+    }
+    return res;
+  }
+};
+
+async function handle(request, env){
     const url = new URL(request.url);
     const p = url.pathname;
 
@@ -341,8 +352,7 @@ export default {
     }
 
     return json({error:'not found'}, 404);
-  }
-};
+}
 
 /* ======================================================================= */
 /*  PAINEL (HTML) — mesma tela aprovada, agora ligada à API                */
@@ -440,7 +450,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .upbox select,.upbox input[type=text]{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:9px;font-size:13px}
 .bar{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;margin-top:10px;display:none}
 .bar div{height:100%;width:0;background:var(--accent);transition:width .2s}
-#login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
+#login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:150;padding:20px}
 .card-login{width:100%;max-width:360px;background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:30px 26px;box-shadow:var(--shadow)}
 .card-login .mark{width:52px;height:52px;border-radius:14px;margin:0 auto 16px;background:linear-gradient(145deg,var(--accent),#146b64);display:flex;align-items:center;justify-content:center}
 .card-login .mark svg{width:27px;height:27px}
@@ -503,9 +513,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <script>
 var TOKEN=null,currentUser=null,cars=[],filter="all",revokeTarget=null,latest=0,canFiles=false,files=[],uploading=false;
 try{TOKEN=localStorage.getItem('ubyd_token');currentUser=localStorage.getItem('ubyd_user');}catch(e){}
+function grabToken(r){var t=r.headers.get('X-Token');if(t){TOKEN=t;try{localStorage.setItem('ubyd_token',t);}catch(e){}}}
 function api(path,opts){opts=opts||{};opts.headers=opts.headers||{};if(TOKEN)opts.headers['Authorization']='Bearer '+TOKEN;
  if(opts.body){opts.headers['Content-Type']='application/json';opts.body=JSON.stringify(opts.body);}
- return fetch(path,opts).then(function(r){if(r.status===401){doLogout();throw new Error('unauth');}return r.json();});}
+ return fetch(path,opts).then(function(r){if(r.status===401){doLogout();throw new Error('unauth');}grabToken(r);return r.json();});}
 function userColor(n){n=(n||'').toLowerCase();if(n==='euler')return '#2bb0a6';if(n==='luis')return '#4f8cff';if(n==='richard')return '#b084f5';return '#8793a6';}
 function respChip(n){if(!n)return '';var c=userColor(n);return '<span class="resp" style="color:'+c+';background:'+c+'22"><span class="dot" style="background:'+c+'"></span>'+n+'</span>';}
 function carSvg(){return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 13l1.5-4.5A2 2 0 0 1 8.4 7h7.2a2 2 0 0 1 1.9 1.5L19 13"/><path d="M4 17h16v-2a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v2z"/><circle cx="7.5" cy="17.5" r="1.5"/><circle cx="16.5" cy="17.5" r="1.5"/></svg>';}
@@ -642,16 +653,28 @@ function delFile(k){if(!confirm('Excluir "'+k+'" do R2?\\n\\nCarros que ainda ap
  api('/api/files/delete',{method:'POST',body:{key:k}}).then(function(){toast('Arquivo excluído');loadFiles();}).catch(function(){});}
 function upMsg(t){document.getElementById('up-msg').textContent=t;}
 function upBar(p){var b=document.getElementById('up-bar');b.style.display=p==null?'none':'block';b.firstChild.style.width=(p||0)+'%';}
+var pendingUp=null; // envio interrompido que pode ser retomado {key,uploadId,parts,size,name}
 function putPart(key,uploadId,n,blob){return fetch('/api/files/mpu/part?key='+encodeURIComponent(key)+'&uploadId='+encodeURIComponent(uploadId)+'&n='+n,{method:'PUT',headers:{'Authorization':'Bearer '+TOKEN},body:blob})
- .then(function(r){if(!r.ok)throw new Error('parte '+n+' falhou ('+r.status+')');return r.json();});}
+ .then(function(r){if(r.status===401){var e=new Error('sessão expirada');e.unauth=true;throw e;}if(!r.ok)throw new Error('parte '+n+' falhou ('+r.status+')');grabToken(r);return r.json();});}
 function uploadOne(file,key,idx,count){var parts=[],uploadId=null,total=Math.max(1,Math.ceil(file.size/CHUNK)),n=0;
- return api('/api/files/mpu/start',{method:'POST',body:{key:key}}).then(function(r){if(!r.uploadId)throw new Error(r.error||'não iniciou');uploadId=r.uploadId;
-  function next(){if(n>=total)return Promise.resolve();n++;var start=(n-1)*CHUNK;var blob=file.slice(start,Math.min(file.size,start+CHUNK));
-   var tries=0;function attempt(){return putPart(key,uploadId,n,blob).catch(function(e){if(++tries<3)return attempt();throw e;});}
-   return attempt().then(function(p){parts.push(p);upMsg('Enviando '+idx+'/'+count+': '+file.name+' — parte '+n+'/'+total);upBar(Math.round(n*100/total));return next();});}
+ var resume=pendingUp&&pendingUp.key===key&&pendingUp.size===file.size&&pendingUp.name===file.name;
+ var begin;
+ if(resume){uploadId=pendingUp.uploadId;parts=pendingUp.parts.slice();n=parts.length;begin=Promise.resolve();upMsg('Retomando '+file.name+' a partir da parte '+(n+1)+'/'+total+'…');}
+ else{if(pendingUp){api('/api/files/mpu/abort',{method:'POST',body:{key:pendingUp.key,uploadId:pendingUp.uploadId}}).catch(function(){});pendingUp=null;}
+  begin=api('/api/files/mpu/start',{method:'POST',body:{key:key}}).then(function(r){if(!r.uploadId)throw new Error(r.error||'não iniciou');uploadId=r.uploadId;});}
+ return begin.then(function(){
+  function next(){if(n>=total)return Promise.resolve();var pn=n+1;var start=(pn-1)*CHUNK;var blob=file.slice(start,Math.min(file.size,start+CHUNK));
+   var tries=0;function attempt(){return putPart(key,uploadId,pn,blob).catch(function(e){if(!e.unauth&&++tries<4)return new Promise(function(ok){setTimeout(ok,3000*tries);}).then(attempt);throw e;});}
+   return attempt().then(function(p){parts.push(p);n=pn;upMsg('Enviando '+idx+'/'+count+': '+file.name+' — parte '+n+'/'+total);upBar(Math.round(n*100/total));return next();});}
   return next();}).then(function(){return api('/api/files/mpu/complete',{method:'POST',body:{key:key,uploadId:uploadId,parts:parts}});})
- .then(function(r){if(!r.ok)throw new Error(r.error||'falhou ao concluir');return r;})
- .catch(function(e){if(uploadId)api('/api/files/mpu/abort',{method:'POST',body:{key:key,uploadId:uploadId}}).catch(function(){});throw e;});}
+ .then(function(r){if(!r.ok)throw new Error(r.error||'falhou ao concluir');pendingUp=null;return r;})
+ .catch(function(e){
+  // Não descarta o que já foi enviado: guarda pra continuar de onde parou.
+  if(uploadId)pendingUp={key:key,uploadId:uploadId,parts:parts,size:file.size,name:file.name};
+  var m=(e&&e.message?e.message:String(e));
+  if(e&&e.unauth){doLogout();m='sua sessão expirou na parte '+(n+1)+'. Entre de novo, escolha o MESMO arquivo e toque em Enviar: continua de onde parou.';}
+  else m=m+'. Escolha o MESMO arquivo e toque em Enviar de novo: continua da parte '+(n+1)+'.';
+  var err=new Error(m);err.keep=true;throw err;});}
 function startUpload(){if(uploading)return;var inp=document.getElementById('up-file');var list=Array.prototype.slice.call(inp.files||[]);
  if(!list.length){toast('Escolha um ou mais arquivos');return;}
  var dir=tabInfo(fTab)[2];var sub=fTab==='extras'?(document.getElementById('up-sub').value||'').trim().replace(/^\\/+|\\/+$/g,''):'';
