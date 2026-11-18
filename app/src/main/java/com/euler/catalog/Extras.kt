@@ -92,7 +92,7 @@ object Extras {
             val ok = try {
                 if (!root.exists()) root.mkdirs()
                 if (!root.isDirectory || !root.canWrite()) false
-                else if (isZip) zipTo(ctx, ex, report) { rel, inp -> writeFile(File(root, stripRoot(rel, pkg, kind)), inp) }
+                else if (isZip) zipTo(ctx, ex, pkg, root, report) { rel, inp -> writeFile(File(root, rel), inp) }
                 else {
                     val dest = File(root, ex.nome)
                     val remote = remoteSize(ex.url)
@@ -109,8 +109,7 @@ object Extras {
         }
         // Sem acesso direto: salva em Download/<pasta>/<pacote>/ para o usuário mover.
         val baseRel = downloadsRel(ex.pasta.ifEmpty { pkg }) + pkg + "/"
-        val ok = if (isZip) zipTo(ctx, ex, report) { rel, inp ->
-                val r = stripRoot(rel, pkg, kind)
+        val ok = if (isZip) zipTo(ctx, ex, pkg, null, report) { r, inp ->
                 val sub = r.substringBeforeLast('/', ""); val name = r.substringAfterLast('/')
                 writeToDownloads(ctx, baseRel + (if (sub.isNotEmpty()) "$sub/" else ""), name, inp)
             }
@@ -123,16 +122,32 @@ object Extras {
         return Result(true, manual)
     }
 
-    /** Remove do caminho do zip a pasta raiz repetida (ex.: "com.jogo/..." ou "Android/data/com.jogo/..."). */
-    private fun stripRoot(rel: String, pkg: String, kind: String): String {
-        var r = rel.replace('\\', '/').trimStart('/')
-        val prefixes = listOf("Android/$kind/$pkg/", "$kind/$pkg/", "$pkg/")
-        for (p in prefixes) if (r.startsWith(p)) { r = r.substring(p.length); break }
-        return r
+    /**
+     * Decide o que do zip vai para a pasta do jogo:
+     *  - se existe uma pasta com o nome do pacote em qualquer nível (ex.: "OBB DFL/com.jogo/..."), usa só o conteúdo dela;
+     *  - senão, se tudo está dentro de uma única pasta (ex.: "OBB DFL/main.obb"), tira essa pasta de fora;
+     *  - senão, usa como está.
+     * Devolve (caminho no zip -> caminho relativo dentro de Android/<tipo>/<pacote>/, ou null para ignorar) e a pasta "embrulho".
+     */
+    private fun zipLayout(names: List<String>, pkg: String): Pair<(String) -> String?, String?> {
+        fun norm(n: String) = n.replace('\\', '/').trimStart('/')
+        val clean = names.map { norm(it) }.filter { !it.startsWith("__MACOSX/") && !it.endsWith("/.DS_Store") && it != ".DS_Store" }
+        fun pkgCut(n: String): Int { if (n.startsWith("$pkg/")) return pkg.length + 1; val i = n.indexOf("/$pkg/"); return if (i >= 0) i + pkg.length + 2 else -1 }
+        if (clean.any { pkgCut(it) >= 0 }) {
+            val first = clean.first { pkgCut(it) >= 0 }
+            val wrapper = first.substring(0, pkgCut(first) - pkg.length - 1).trimEnd('/').substringBefore('/').ifEmpty { null }
+            return Pair({ n: String -> val x = norm(n); val c = pkgCut(x); if (c >= 0 && c < x.length) x.substring(c) else null }, wrapper)
+        }
+        val tops = clean.map { it.substringBefore('/', "") }.toSet()
+        if (tops.size == 1 && tops.first().isNotEmpty() && clean.all { it.contains('/') }) {
+            val top = tops.first()
+            return Pair({ n: String -> val x = norm(n); if (x.startsWith("$top/") && x.length > top.length + 1) x.substring(top.length + 1) else null }, top)
+        }
+        return Pair({ n: String -> val x = norm(n); if (x.startsWith("__MACOSX/") || x.isEmpty()) null else x }, null)
     }
 
-    /** Baixa o zip para o cache, descompacta entrada por entrada com write(caminho, conteúdo) e apaga o zip. */
-    private fun zipTo(ctx: Context, ex: Extra, report: (String) -> Unit, write: (String, InputStream) -> Boolean): Boolean {
+    /** Baixa o zip para o cache, descompacta entrada por entrada com write(caminho relativo, conteúdo) e apaga o zip. */
+    private fun zipTo(ctx: Context, ex: Extra, pkg: String, root: File?, report: (String) -> Unit, write: (String, InputStream) -> Boolean): Boolean {
         val tmp = File(ctx.cacheDir, "x_" + ex.nome.hashCode() + ".zip")
         var keepPart = false
         try {
@@ -143,9 +158,14 @@ object Extras {
             if (!okd) { keepPart = true; return false }   // mantém o pedaço baixado para retomar na próxima tentativa
             ZipFile(tmp).use { zf ->
                 val entries = zf.entries().toList().filter { !it.isDirectory && !it.name.contains("..") }
+                val (map, wrapper) = zipLayout(entries.map { it.name }, pkg)
+                // Limpa a pasta "embrulho" que uma instalação antiga possa ter deixado dentro da pasta do jogo (ex.: Android/obb/com.jogo/OBB DFL).
+                if (root != null && wrapper != null && wrapper != pkg) try { File(root, wrapper).deleteRecursively() } catch (_: Exception) {}
                 val total = entries.sumOf { maxOf(it.size, 0L) }.coerceAtLeast(1L); var done = 0L; var lastPct = -1
                 for (en in entries) {
-                    val ok = zf.getInputStream(en).use { write(en.name, it) }
+                    val rel = map(en.name)
+                    if (rel == null || rel.isEmpty()) { done += maxOf(en.size, 0L); continue }
+                    val ok = zf.getInputStream(en).use { write(rel, it) }
                     if (!ok) return false
                     done += maxOf(en.size, 0L)
                     val pct = ((done * 100) / total).toInt()
