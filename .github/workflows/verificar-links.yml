@@ -1,0 +1,24 @@
+name: verificar-links
+# Confere se arquivos do R2 respondem pelo Worker (HEAD). Entrada: caminhos separados por "|".
+on:
+  workflow_dispatch:
+    inputs:
+      caminhos:
+        description: 'Caminhos depois de /f/, separados por |'
+        required: true
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: HEAD em cada arquivo
+        env:
+          CAMINHOS: ${{ inputs.caminhos }}
+        run: |
+          BASE="https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/"
+          IFS='|' read -ra L <<< "$CAMINHOS"
+          for c in "${L[@]}"; do
+            u="$BASE$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$c")"
+            r=$(curl -s -o /dev/null -I -w "%{http_code} %header{content-length}" "$u")
+            echo "RESULT $r $c"
+          done
