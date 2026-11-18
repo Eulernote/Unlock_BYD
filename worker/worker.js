@@ -511,7 +511,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div class="wrap">
 <div class="topbar"><div class="logo"><div class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#04201d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
 <div><h1>Painel de Ativação</h1><span>Unlock BYD</span></div></div><div class="spacer"></div>
-<div class="userbox"><button class="btn-ghost" id="cat-btn" style="display:none" onclick="openCat()">Loja</button><button class="btn-ghost" id="files-btn" style="display:none" onclick="openFiles()">Arquivos</button><div class="av" id="whoav"></div><div class="nm" id="whoami"></div><button class="btn-ghost" onclick="logout()">Sair</button></div></div>
+<div class="userbox"><button class="btn-ghost" id="cat-btn" style="display:none" onclick="openCat()">Loja</button><button class="btn-ghost" id="files-btn" style="display:none" onclick="openFiles()">Armazenamento</button><div class="av" id="whoav"></div><div class="nm" id="whoami"></div><button class="btn-ghost" onclick="logout()">Sair</button></div></div>
 <div class="stats"><div class="stat"><div class="n" id="s-total">0</div><div class="l">Veículos</div></div>
 <div class="stat pend"><div class="n" id="s-pend">0</div><div class="l">Pendentes</div></div>
 <div class="stat act"><div class="n" id="s-act">0</div><div class="l">Ativos</div></div>
@@ -536,10 +536,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div id="d-actions" style="margin-top:14px"></div>
 <div class="sec-title" style="margin:16px 0 2px">Histórico de alterações</div><div id="d-log"></div></div></div>
 <div id="files" class="modal-ov" style="display:none"><div class="modal wide"><div class="mtop" style="margin-bottom:12px">
-<div style="flex:1"><h3>Arquivos da loja (R2)</h3><p class="sub">APKs, discos, OBB, ícones e catálogo que os carros baixam.</p></div><button class="modal-x" onclick="closeFiles()">✕ Fechar</button></div>
+<div style="flex:1"><h3>Armazenamento (R2)</h3><p class="sub">O que está guardado no Cloudflare. Para adicionar apps e arquivos, use a aba Loja.</p></div><button class="modal-x" onclick="closeFiles()">✕ Fechar</button></div>
 <div class="ftabs" id="f-tabs"></div>
 <div class="fnote" id="f-note" style="display:none"></div>
-<div class="upbox" id="up-box"><div style="font-size:12.5px;font-weight:700;margin-bottom:8px" id="up-title">Enviar para Apps</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<div id="st-sum"></div><div class="upbox" id="up-box" style="display:none"><div style="font-size:12.5px;font-weight:700;margin-bottom:8px" id="up-title">Enviar para Apps</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
 <input type="text" id="up-sub" placeholder="pasta do jogo (ex.: re4)" style="flex:1;min-width:140px;display:none">
 <input type="file" id="up-file" multiple style="font-size:12.5px;color:var(--muted)">
 <button class="btn btn-reapprove" id="up-go" onclick="startUpload()">Enviar</button></div>
@@ -647,6 +647,30 @@ function askDelete(id){var c=cars.filter(function(x){return x.id===id;})[0];
  api('/api/delete',{method:'POST',body:{id:id}}).then(function(){toast('Veículo excluído');closeDetail();loadCars();}).catch(function(){});}
 /* ---------- arquivos (R2) ---------- */
 var CHUNK=50*1024*1024;
+var FREE_BYTES=10*1024*1024*1024,usedKeys=null;
+/* chaves usadas pela loja: catálogo do painel (R2) + catálogo antigo do GitHub (carros na v12) */
+function catKeys(cat,set){(cat&&cat.apps||[]).forEach(function(a){[a.url,a.icon,a.lock_url].forEach(function(u){var k=urlKey(u);if(k)set[k]=1;});
+ (a.extras||[]).forEach(function(x){var k=urlKey(x.url);if(k)set[k]=1;});});}
+function loadUsed(){var set={};
+ var p1=api('/api/catalog').then(function(r){catKeys(r.catalog,set);});
+ var p2=fetch('https://raw.githubusercontent.com/Eulernote/Unlock_BYD/main/catalog.json',{cache:'no-store'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(j)catKeys(j,set);}).catch(function(){});
+ return Promise.all([p1,p2]).then(function(){usedKeys=set;return set;});}
+function isSystemKey(k){return k==='catalog.json'||k==='app_version.json'||k.indexOf('app/')===0||k.indexOf('backups/')===0;}
+function isUnused(f){return usedKeys&&!isSystemKey(f.key)&&!usedKeys[f.key];}
+function renderSummary(){var total=files.reduce(function(a,f){return a+f.size;},0);var pct=Math.min(100,Math.round(total*100/FREE_BYTES));
+ var un=files.filter(isUnused);var unSize=un.reduce(function(a,f){return a+f.size;},0);
+ var col=pct>=90?'var(--red)':(pct>=70?'var(--amber)':'var(--accent)');
+ var h='<div class="fnote" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><b style="color:var(--text)">'+fmtSize(total)+' usados</b><span>de 10 GB grátis · '+pct+'%'+(total>FREE_BYTES?' · acima do grátis: ~US$ '+((total-FREE_BYTES)/1073741824*0.015).toFixed(2)+'/mês':'')+'</span></div>'
+  +'<div style="height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;margin-top:8px"><div style="height:100%;width:'+pct+'%;background:'+col+'"></div></div>';
+ if(usedKeys===null)h+='<div style="margin-top:10px">Verificando quais arquivos a loja usa…</div>';
+ else if(un.length)h+='<div style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span style="color:#f2c25b"><b>'+un.length+' arquivo'+(un.length>1?'s':'')+' sem uso</b> ('+fmtSize(unSize)+') — não aparecem em nenhum app da loja.</span>'
+  +'<button class="fbtn del" onclick="delUnused()">Apagar arquivos sem uso</button></div>';
+ else h+='<div style="margin-top:10px;color:var(--green)">✓ Nenhum arquivo sem uso.</div>';
+ document.getElementById('st-sum').innerHTML=h+'</div>';}
+function delUnused(){var un=files.filter(isUnused);if(!un.length)return;var size=un.reduce(function(a,f){return a+f.size;},0);
+ if(!confirm('Apagar '+un.length+' arquivo(s) sem uso ('+fmtSize(size)+')?\\n\\n'+un.slice(0,15).map(function(f){return '• '+f.key;}).join('\\n')+(un.length>15?'\\n…':'')+'\\n\\nNenhum app da loja usa esses arquivos.'))return;
+ var i=0;function next(){if(i>=un.length)return Promise.resolve();var f=un[i++];return api('/api/files/delete',{method:'POST',body:{key:f.key}}).then(next);}
+ next().then(function(){toast('Arquivos sem uso apagados');}).catch(function(){toast('Alguns arquivos não foram apagados');}).then(loadFiles);}
 var fTab='apps';
 var FTABS=[['apps','Apps','apps/','APKs e XAPKs que aparecem na loja. Depois de enviar, copie o link e cole no catálogo.'],
  ['extras','Extras','extras/','Discos, OBB e pastas data dos jogos. Use uma pasta por jogo (ex.: re4).'],
@@ -662,22 +686,24 @@ function esc(s){return String(s).replace(/[&<>"']/g,function(ch){return {'&':'&a
 function fileUrl(k){return location.origin+'/f/'+k.split('/').map(encodeURIComponent).join('/');}
 function openFiles(){document.getElementById('files').style.display='flex';loadFiles();}
 function closeFiles(){if(uploading&&!confirm('Há um envio em andamento. Fechar mesmo assim? (o envio continua enquanto esta aba estiver aberta)'))return;document.getElementById('files').style.display='none';}
-function loadFiles(){api('/api/files').then(function(r){files=r.files||[];renderFiles();}).catch(function(){document.getElementById('f-list').innerHTML='<div class="empty">Não consegui listar os arquivos.</div>';});}
-function fileRow(f,shown){return '<div class="frow"><div class="fk">'+esc(shown)+'</div><div class="fs">'+fmtSize(f.size)+' · '+f.uploaded+'</div>'
+function loadFiles(){usedKeys=null;api('/api/files').then(function(r){files=r.files||[];renderFiles();return loadUsed();}).then(function(){renderFiles();}).catch(function(){document.getElementById('f-list').innerHTML='<div class="empty">Não consegui listar os arquivos.</div>';});}
+function fileRow(f,shown){var un=isUnused(f);
+ return '<div class="frow"><div class="fk">'+esc(shown)+(un?' <span class="pbadge" style="color:#f2c25b;background:#f5a62322">sem uso</span>':'')+'</div><div class="fs">'+fmtSize(f.size)+' · '+f.uploaded+'</div>'
   +'<button class="fbtn" data-k="'+esc(f.key)+'" onclick="copyLink(this.dataset.k)">Copiar link</button>'
-  +(fTab==='app'||fTab==='outros'?'':'<button class="fbtn del" data-k="'+esc(f.key)+'" onclick="delFile(this.dataset.k)">Excluir</button>')+'</div>';}
-function renderFiles(){var q=(document.getElementById('f-q').value||'').toLowerCase();var info=tabInfo(fTab);
+  +(un?'<button class="fbtn del" data-k="'+esc(f.key)+'" onclick="delFile(this.dataset.k)">Excluir</button>':'')+'</div>';}
+function renderFiles(){var q=(document.getElementById('f-q').value||'').toLowerCase();var info=tabInfo(fTab);renderSummary();
  // abas com contagem
  var th='';for(var i=0;i<FTABS.length;i++){var t=FTABS[i];var n=files.filter(function(f){return tabOf(f.key)===t[0];}).length;
   th+='<div class="chip'+(t[0]===fTab?' on':'')+'" onclick="setFTab(\\''+t[0]+'\\')">'+t[1]+'<span class="ct">'+n+'</span></div>';}
  document.getElementById('f-tabs').innerHTML=th;
  // envio: só nas abas Apps, Extras e Ícones (App e Catálogo são publicados pelo GitHub)
  var managed=(fTab==='app'||fTab==='outros');
- document.getElementById('up-box').style.display=managed?'none':'';
+ document.getElementById('up-box').style.display='none';   // envio agora só pela aba Loja
  document.getElementById('up-sub').style.display=fTab==='extras'?'':'none';
  document.getElementById('up-title').textContent='Enviar para '+info[1]+(info[3]?' — '+info[3]:'');
  var note=document.getElementById('f-note');
- if(managed){note.style.display='block';note.innerHTML=fTab==='app'?'O APK do Unlock BYD e o <b>app_version.json</b> são publicados automaticamente pelo GitHub (pasta <b>dist/</b> e arquivo <b>app_version.json</b> do repositório). Não envie por aqui.'
+ if(!managed){note.style.display='block';note.innerHTML='Só arquivos <b>sem uso</b> podem ser excluídos aqui. Para trocar ou tirar arquivos de um app, use a aba <b>Loja</b>.';}
+ else if(managed){note.style.display='block';note.innerHTML=fTab==='app'?'O APK do Unlock BYD e o <b>app_version.json</b> são publicados automaticamente pelo GitHub (pasta <b>dist/</b> e arquivo <b>app_version.json</b> do repositório). Não envie por aqui.'
   :'O <b>catalog.json</b> é editado pela aba <b>Loja</b> do painel (cada salvamento guarda uma cópia em <b>backups/</b>). Não envie por aqui.';}else note.style.display='none';
  var all=files.filter(function(f){return tabOf(f.key)===fTab;});
  var rows=all.filter(function(f){return !q||f.key.toLowerCase().indexOf(q)>=0;});
@@ -741,7 +767,7 @@ function catSave(){return api('/api/catalog',{method:'PUT',body:{catalog:CAT,eta
   if(r.error==='conflict')throw new Error('outra pessoa salvou o catálogo agora há pouco. Abra a Loja de novo e refaça a alteração.');
   if(r.error)throw new Error(r.error);CAT_ETAG=r.etag;return r;});}
 function keyUrl(k){return location.origin+'/f/'+k.split('/').map(encodeURIComponent).join('/');}
-function urlKey(u){var i=(u||'').indexOf('/f/');if(i<0)return '';try{return decodeURIComponent(u.slice(i+3));}catch(e){return '';}}
+function urlKey(u){var i=(u||'').indexOf('/f/');if(i<0)return '';var r=u.slice(i+3).split('?')[0].split('#')[0];try{return decodeURIComponent(r);}catch(e){return '';}}
 function catList(){document.getElementById('cat-title').textContent='Loja (catálogo)';catEditIdx=-1;
  var apps=CAT.apps;var h='<div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap"><button class="btn btn-approve" onclick="catEdit(-1)">+ Novo app</button>'
   +'<input type="text" id="cat-q" placeholder="Filtrar..." oninput="catRows()" style="flex:1;min-width:150px;background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:9px 11px;border-radius:9px;font-size:13px"></div><div id="cat-rows"></div>';
