@@ -616,6 +616,7 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  var h=planPicker(chosenPlan);
  if(c.ask) h+=groupPicker(chosenGrupo);
  else h+='<div class="sec-title" style="margin:2px 0 12px">Pacote: <span style="color:var(--text)">'+grupoName(c.grupo||'byd_simples')+'</span> <span style="color:var(--faint);font-weight:400">· definido pelo modelo</span></div>';
+ h+='<div id="plan-prev" style="margin:-4px 0 14px"></div>';
  if(c.status==='pending') h+='<button class="btn btn-approve" style="width:100%" onclick="activate(\\''+c.id+'\\')">Ativar com este plano</button>';
  else if(c.status==='active'){ h+='<button class="btn btn-reapprove" style="width:100%;margin-bottom:8px" onclick="activate(\\''+c.id+'\\')">Salvar plano</button>';
    h+='<button class="btn btn-revoke" style="width:100%" onclick="openRevoke(\\''+c.id+'\\')">Revogar acesso</button>'; }
@@ -627,7 +628,7 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  var log=(c.log||[]).slice().reverse();var dl=document.getElementById('d-log');
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}
  else{dl.innerHTML=log.map(function(e){var col=userColor(e.by);return '<div class="logrow"><span class="logact '+e.cls+'">'+e.acao+'</span><span class="logby">por <span style="color:'+col+';font-weight:650">'+e.by+'</span></span><span class="logwhen">'+e.when+'</span></div>';}).join('');}
- document.getElementById('detail').style.display='flex';}
+ document.getElementById('detail').style.display='flex';planPreview();}
 function closeDetail(){document.getElementById('detail').style.display='none';}
 function allowRemoval(id){api('/api/allow-removal',{method:'POST',body:{id:id}}).then(function(){toast('Remoção de Device Owner autorizada');loadCars();closeDetail();}).catch(function(){});}
 var chosenPlan='basico'; var chosenGrupo='byd_simples';
@@ -635,12 +636,27 @@ function planPicker(sel){var o=[['basico','Básico'],['intermediario','Intermedi
  var h='<div class="sec-title" style="margin:2px 0 8px">Plano da loja</div><div id="planpick" style="display:flex;gap:8px;margin-bottom:14px">';
  for(var i=0;i<o.length;i++){h+='<button class="planbtn'+(o[i][0]===sel?' on':'')+'" data-plan="'+o[i][0]+'" onclick="pickPlan(this)">'+o[i][1]+'</button>';}
  return h+'</div>';}
-function pickPlan(el){chosenPlan=el.dataset.plan;var b=document.querySelectorAll('#planpick .planbtn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');}
+function pickPlan(el){chosenPlan=el.dataset.plan;var b=document.querySelectorAll('#planpick .planbtn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');planPreview();}
 function groupPicker(sel){var o=[['byd_simples','Simples'],['byd_google','Google']];
  var h='<div class="sec-title" style="margin:2px 0 8px">Pacote (Song/Yuan)</div><div id="grppick" style="display:flex;gap:8px;margin-bottom:14px">';
  for(var i=0;i<o.length;i++){h+='<button class="planbtn'+(o[i][0]===sel?' on':'')+'" data-grp="'+o[i][0]+'" onclick="pickGrupo(this)">'+o[i][1]+'</button>';}
  return h+'</div>';}
-function pickGrupo(el){chosenGrupo=el.dataset.grp;var b=document.querySelectorAll('#grppick .planbtn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');}
+function pickGrupo(el){chosenGrupo=el.dataset.grp;var b=document.querySelectorAll('#grppick .planbtn');for(var i=0;i<b.length;i++)b[i].classList.remove('on');el.classList.add('on');planPreview();}
+/* prévia dos apps que o carro vai ver com o plano/pacote escolhidos (mesma regra do app no carro) */
+var PREV_CAT=null,PREV_AT=0;
+function planRank(p){return p==='premium'?3:(p==='intermediario'?2:1);}
+function planPreview(){var box=document.getElementById('plan-prev');if(!box)return;
+ var go=function(){var apps=(PREV_CAT&&PREV_CAT.apps)||[];
+  var vis=apps.filter(function(a){var g=a.grupos||[];return (!g.length||g.indexOf(chosenGrupo)>=0)&&planRank(a.plano||'basico')<=planRank(chosenPlan);});
+  var lower=chosenPlan==='basico'?null:(chosenPlan==='premium'?'intermediario':'basico');
+  var h='<div style="font-size:11.5px;color:var(--faint);margin-bottom:6px">'+vis.length+' apps em '+planName(chosenPlan)+' · '+grupoName(chosenGrupo)+(lower?' — <span style="color:var(--accent)">destacados</span> = só a partir deste plano':'')+'</div><div style="display:flex;flex-wrap:wrap;gap:5px">';
+  h+=vis.map(function(a){var own=lower&&planRank(a.plano||'basico')===planRank(chosenPlan);
+   return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 8px 3px 4px;border-radius:999px;border:1px solid '+(own?'var(--accent)':'var(--border)')+';background:'+(own?'#0f2b29':'var(--bg2)')+';color:'+(own?'var(--text)':'var(--muted)')+'">'
+    +(a.icon?'<img src="'+esc(a.icon)+'" alt="" style="width:16px;height:16px;border-radius:4px;object-fit:contain">':'')+esc(a.name)+'</span>';}).join('');
+  box.innerHTML=h+(vis.length?'':'<span style="font-size:12px;color:var(--faint)">Nenhum app neste plano/pacote.</span>')+'</div>';};
+ if(PREV_CAT&&Date.now()-PREV_AT<60000){go();return;}
+ box.innerHTML='<div style="font-size:11.5px;color:var(--faint)">Carregando apps do plano…</div>';
+ fetch('/catalog.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(j){PREV_CAT=j;PREV_AT=Date.now();go();}).catch(function(){box.innerHTML='';});}
 function activate(id){var pl=chosenPlan,gr=chosenGrupo;api('/api/approve',{method:'POST',body:{id:id,plan:pl,grupo:gr}}).then(function(){toast('✓ Ativo · '+planName(pl)+' · '+grupoName(gr));for(var i=0;i<cars.length;i++){if(cars[i].id===id){cars[i].status='active';cars[i].plan=pl;cars[i].grupo=gr;cars[i].wipe=false;}}closeDetail();render();}).catch(function(){});}
 function askDelete(id){var c=cars.filter(function(x){return x.id===id;})[0];
  if(!confirm('Excluir o veículo "'+(c?c.nome:id)+'"?\\n\\nEle sai do painel e, ao abrir o app, o cliente volta para a tela de escolher modelo e nome para solicitar acesso novamente.'))return;
