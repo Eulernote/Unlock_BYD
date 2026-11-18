@@ -432,6 +432,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 .frow .fs{font-size:11.5px;color:var(--faint);white-space:nowrap}
 .fbtn{background:var(--bg2);border:1px solid var(--border);color:var(--muted);padding:6px 10px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
 .fbtn:hover{color:var(--text)}.fbtn.del:hover{color:var(--red);border-color:var(--red)}
+.ftabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.ftabs .chip .ct{opacity:.7;font-weight:700;margin-left:4px}
+.fgrp{font-size:11.5px;text-transform:uppercase;letter-spacing:.7px;color:var(--accent);font-weight:700;margin:14px 0 2px}
+.fnote{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:12.5px;color:var(--muted);line-height:1.5}
 .upbox{background:var(--bg2);border:1px dashed var(--border2);border-radius:12px;padding:14px;margin-bottom:14px}
 .upbox select,.upbox input[type=text]{background:var(--surface);border:1px solid var(--border);color:var(--text);padding:9px 10px;border-radius:9px;font-size:13px}
 .bar{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden;margin-top:10px;display:none}
@@ -485,9 +489,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div class="sec-title" style="margin:16px 0 2px">Histórico de alterações</div><div id="d-log"></div></div></div>
 <div id="files" class="modal-ov" style="display:none"><div class="modal wide"><div class="mtop" style="margin-bottom:12px">
 <div style="flex:1"><h3>Arquivos da loja (R2)</h3><p class="sub">APKs, discos, OBB, ícones e catálogo que os carros baixam.</p></div><button class="modal-x" onclick="closeFiles()">✕ Fechar</button></div>
-<div class="upbox"><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-<select id="up-dir"><option value="apps/">apps/</option><option value="extras/">extras/ (discos, OBB, data)</option><option value="icons/">icons/</option><option value="">(raiz)</option></select>
-<input type="text" id="up-sub" placeholder="subpasta opcional (ex.: re4)" style="flex:1;min-width:140px">
+<div class="ftabs" id="f-tabs"></div>
+<div class="fnote" id="f-note" style="display:none"></div>
+<div class="upbox" id="up-box"><div style="font-size:12.5px;font-weight:700;margin-bottom:8px" id="up-title">Enviar para Apps</div><div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<input type="text" id="up-sub" placeholder="pasta do jogo (ex.: re4)" style="flex:1;min-width:140px;display:none">
 <input type="file" id="up-file" multiple style="font-size:12.5px;color:var(--muted)">
 <button class="btn btn-reapprove" id="up-go" onclick="startUpload()">Enviar</button></div>
 <div id="up-msg" style="font-size:12.5px;color:var(--muted);margin-top:8px">Arquivos com o mesmo nome são substituídos. Pode fechar outras abas, mas não esta, até terminar.</div>
@@ -589,20 +594,48 @@ function askDelete(id){var c=cars.filter(function(x){return x.id===id;})[0];
  api('/api/delete',{method:'POST',body:{id:id}}).then(function(){toast('Veículo excluído');closeDetail();loadCars();}).catch(function(){});}
 /* ---------- arquivos (R2) ---------- */
 var CHUNK=50*1024*1024;
+var fTab='apps';
+var FTABS=[['apps','Apps','apps/','APKs e XAPKs que aparecem na loja. Depois de enviar, copie o link e cole no catálogo.'],
+ ['extras','Extras','extras/','Discos, OBB e pastas data dos jogos. Use uma pasta por jogo (ex.: re4).'],
+ ['icons','Ícones','icons/','Ícones dos apps (PNG).'],
+ ['app','App Unlock BYD','app/',''],
+ ['outros','Catálogo e outros','','']];
+function tabOf(k){if(k.indexOf('apps/')===0)return 'apps';if(k.indexOf('extras/')===0)return 'extras';if(k.indexOf('icons/')===0)return 'icons';
+ if(k.indexOf('app/')===0||k==='app_version.json')return 'app';return 'outros';}
+function tabInfo(t){for(var i=0;i<FTABS.length;i++)if(FTABS[i][0]===t)return FTABS[i];return FTABS[0];}
+function setFTab(t){fTab=t;document.getElementById('f-q').value='';renderFiles();}
 function fmtSize(n){if(n>=1073741824)return (n/1073741824).toFixed(2)+' GB';if(n>=1048576)return (n/1048576).toFixed(1)+' MB';return Math.max(1,Math.round(n/1024))+' KB';}
 function esc(s){return String(s).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
 function fileUrl(k){return location.origin+'/f/'+k.split('/').map(encodeURIComponent).join('/');}
 function openFiles(){document.getElementById('files').style.display='flex';loadFiles();}
 function closeFiles(){if(uploading&&!confirm('Há um envio em andamento. Fechar mesmo assim? (o envio continua enquanto esta aba estiver aberta)'))return;document.getElementById('files').style.display='none';}
 function loadFiles(){api('/api/files').then(function(r){files=r.files||[];renderFiles();}).catch(function(){document.getElementById('f-list').innerHTML='<div class="empty">Não consegui listar os arquivos.</div>';});}
-function renderFiles(){var q=(document.getElementById('f-q').value||'').toLowerCase();
- var rows=files.filter(function(f){return !q||f.key.toLowerCase().indexOf(q)>=0;});
- var total=files.reduce(function(a,f){return a+f.size;},0);
- var h='<div style="font-size:12px;color:var(--faint);margin:4px 0 6px">'+files.length+' arquivos · '+fmtSize(total)+' no total</div>';
- if(!rows.length){document.getElementById('f-list').innerHTML=h+'<div class="empty">Nenhum arquivo.</div>';return;}
- h+=rows.map(function(f,i){return '<div class="frow"><div class="fk">'+esc(f.key)+'</div><div class="fs">'+fmtSize(f.size)+' · '+f.uploaded+'</div>'
+function fileRow(f,shown){return '<div class="frow"><div class="fk">'+esc(shown)+'</div><div class="fs">'+fmtSize(f.size)+' · '+f.uploaded+'</div>'
   +'<button class="fbtn" data-k="'+esc(f.key)+'" onclick="copyLink(this.dataset.k)">Copiar link</button>'
-  +'<button class="fbtn del" data-k="'+esc(f.key)+'" onclick="delFile(this.dataset.k)">Excluir</button></div>';}).join('');
+  +(fTab==='app'||fTab==='outros'?'':'<button class="fbtn del" data-k="'+esc(f.key)+'" onclick="delFile(this.dataset.k)">Excluir</button>')+'</div>';}
+function renderFiles(){var q=(document.getElementById('f-q').value||'').toLowerCase();var info=tabInfo(fTab);
+ // abas com contagem
+ var th='';for(var i=0;i<FTABS.length;i++){var t=FTABS[i];var n=files.filter(function(f){return tabOf(f.key)===t[0];}).length;
+  th+='<div class="chip'+(t[0]===fTab?' on':'')+'" onclick="setFTab(\\''+t[0]+'\\')">'+t[1]+'<span class="ct">'+n+'</span></div>';}
+ document.getElementById('f-tabs').innerHTML=th;
+ // envio: só nas abas Apps, Extras e Ícones (App e Catálogo são publicados pelo GitHub)
+ var managed=(fTab==='app'||fTab==='outros');
+ document.getElementById('up-box').style.display=managed?'none':'';
+ document.getElementById('up-sub').style.display=fTab==='extras'?'':'none';
+ document.getElementById('up-title').textContent='Enviar para '+info[1]+(info[3]?' — '+info[3]:'');
+ var note=document.getElementById('f-note');
+ if(managed){note.style.display='block';note.innerHTML=fTab==='app'?'O APK do Unlock BYD e o <b>app_version.json</b> são publicados automaticamente pelo GitHub (pasta <b>dist/</b> e arquivo <b>app_version.json</b> do repositório). Não envie por aqui.'
+  :'O <b>catalog.json</b> é publicado automaticamente pelo GitHub a partir do arquivo do repositório. Edite lá, não por aqui.';}else note.style.display='none';
+ var all=files.filter(function(f){return tabOf(f.key)===fTab;});
+ var rows=all.filter(function(f){return !q||f.key.toLowerCase().indexOf(q)>=0;});
+ var total=all.reduce(function(a,f){return a+f.size;},0);
+ var h='<div style="font-size:12px;color:var(--faint);margin:4px 0 6px">'+all.length+' arquivo'+(all.length===1?'':'s')+' · '+fmtSize(total)+'</div>';
+ if(!rows.length){document.getElementById('f-list').innerHTML=h+'<div class="empty">Nenhum arquivo nesta seção.</div>';return;}
+ var pre=info[2];
+ if(fTab==='extras'){ // agrupa por pasta do jogo
+  var groups={},order=[];rows.forEach(function(f){var rest=f.key.slice(pre.length);var g=rest.indexOf('/')>=0?rest.split('/')[0]:'(sem pasta)';if(!groups[g]){groups[g]=[];order.push(g);}groups[g].push(f);});
+  order.sort();order.forEach(function(g){h+='<div class="fgrp">'+esc(g)+'</div>';groups[g].forEach(function(f){var rest=f.key.slice(pre.length);h+=fileRow(f,g==='(sem pasta)'?rest:rest.slice(g.length+1));});});
+ } else h+=rows.map(function(f){return fileRow(f,pre&&f.key.indexOf(pre)===0?f.key.slice(pre.length):f.key);}).join('');
  document.getElementById('f-list').innerHTML=h;}
 function copyLink(k){var u=fileUrl(k);try{navigator.clipboard.writeText(u).then(function(){toast('Link copiado');},function(){prompt('Copie o link:',u);});}catch(e){prompt('Copie o link:',u);}}
 function delFile(k){if(!confirm('Excluir "'+k+'" do R2?\\n\\nCarros que ainda apontam para este arquivo não vão conseguir baixá-lo.'))return;
@@ -621,7 +654,8 @@ function uploadOne(file,key,idx,count){var parts=[],uploadId=null,total=Math.max
  .catch(function(e){if(uploadId)api('/api/files/mpu/abort',{method:'POST',body:{key:key,uploadId:uploadId}}).catch(function(){});throw e;});}
 function startUpload(){if(uploading)return;var inp=document.getElementById('up-file');var list=Array.prototype.slice.call(inp.files||[]);
  if(!list.length){toast('Escolha um ou mais arquivos');return;}
- var dir=document.getElementById('up-dir').value;var sub=(document.getElementById('up-sub').value||'').trim().replace(/^\\/+|\\/+$/g,'');
+ var dir=tabInfo(fTab)[2];var sub=fTab==='extras'?(document.getElementById('up-sub').value||'').trim().replace(/^\\/+|\\/+$/g,''):'';
+ if(fTab==='extras'&&!sub){toast('Digite a pasta do jogo (ex.: re4)');return;}
  var prefix=dir+(sub?sub+'/':'');uploading=true;document.getElementById('up-go').disabled=true;upBar(0);
  var i=0;function go(){if(i>=list.length)return Promise.resolve();var f=list[i++];return uploadOne(f,prefix+f.name,i,list.length).then(go);}
  go().then(function(){upMsg('✓ Envio concluído ('+list.length+' arquivo'+(list.length>1?'s':'')+').');toast('Envio concluído');inp.value='';})
