@@ -43,7 +43,7 @@ jobs:
           set -e
           put(){ wrangler r2 object put "unlock-byd/$1" --file "$2" --remote --content-type "$3"; }
           # APK primeiro: o app_version.json só aponta pra ele depois que ele já está lá.
-          put app/UnlockBYD.apk dist/UnlockBYD.apk application/vnd.android.package-archive
+          put app/Unlock_BYD.apk dist/Unlock_BYD.apk application/vnd.android.package-archive
           for f in icons/*; do put "icons/$(basename "$f")" "$f" image/png; done
           put catalog.json catalog.json "application/json; charset=utf-8"
           put app_version.json app_version.json "application/json; charset=utf-8"
