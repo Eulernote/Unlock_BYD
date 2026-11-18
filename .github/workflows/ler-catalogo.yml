@@ -1,0 +1,11 @@
+name: ler-catalogo
+# Mostra no log o catalog.json publicado (em base64), para conferir/ajustar.
+on:
+  workflow_dispatch:
+jobs:
+  ler:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsSL -A "Dalvik/2.1.0 (Linux; U; Android 10)" https://euler-catalog.eulerfilhogontijodamata.workers.dev/catalog.json -o c.json
+          echo "INICIO"; base64 -w0 c.json; echo; echo "FIM"
