@@ -63,7 +63,9 @@ object Updater {
                 val tries = Store.getTries(ctx, a.pkg, a.build)
                 if (tries >= 2) continue
                 Store.setTries(ctx, a.pkg, a.build, tries + 1)
-                if (silentInstall(ctx, a.url, a.pkg)) { Store.setBuild(ctx, a.pkg, a.build); Store.logAuto(ctx, a.pkg) }
+                val ok = silentInstall(ctx, a.url, a.pkg)
+                if (ok) Store.setBuild(ctx, a.pkg, a.build)
+                Store.logAuto(ctx, if (ok) a.pkg else "${a.pkg} (falhou, tentativa ${tries + 1})")
             }
         }
     }
