@@ -1,0 +1,29 @@
+name: inspecionar-apk
+# Mostra pacote, versão e assinatura de um APK (ex.: um arquivo do R2).
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Link do APK (ex.: painel > Arquivos > Copiar link)'
+        required: true
+
+jobs:
+  inspecionar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar
+        run: curl -fsSL -o app.apk "${{ github.event.inputs.url }}" && ls -la app.apk
+      - name: Analisar
+        run: |
+          pip install -q androguard
+          python3 - <<'PY'
+          from loguru import logger; logger.remove()
+          from androguard.core.apk import APK
+          a = APK('app.apk')
+          print('pacote:', a.get_package())
+          print('versionCode:', a.get_androidversion_code(), '| versionName:', a.get_androidversion_name())
+          print('minSdk:', a.get_min_sdk_version(), '| targetSdk:', a.get_target_sdk_version())
+          for c in a.get_certificates():
+              print('certificado:', c.subject.human_friendly)
+              print('sha256:', c.sha256.hex() if isinstance(c.sha256, bytes) else c.sha256)
+          PY
