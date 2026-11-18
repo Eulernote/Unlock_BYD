@@ -47,3 +47,5 @@ jobs:
           for f in icons/*; do put "icons/$(basename "$f")" "$f" image/png; done
           put catalog.json catalog.json "application/json; charset=utf-8"
           put app_version.json app_version.json "application/json; charset=utf-8"
+          # Nome antigo do APK (antes de padronizar para Unlock_BYD.apk) — não é mais usado.
+          wrangler r2 object delete unlock-byd/app/UnlockBYD.apk --remote || true
