@@ -1,6 +1,7 @@
 package com.euler.catalog
 
 import android.content.Context
+import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.view.Display
 
@@ -34,6 +35,79 @@ object ClusterCast {
     /** Último app jogado no cluster, pra conseguir trazer de volta. */
     @Volatile var lastPkg: String = ""
     @Volatile var lastComp: String = ""
+    @Volatile var lastDisplayId: Int = -1
+
+    // ---------- perfil do cluster (detecção automática por tamanho) ----------
+
+    data class ClusterProfile(val found: Boolean, val displayId: Int, val w: Int, val h: Int, val density: Int) {
+        val key get() = "${w}x${h}"
+        /** Polegadas são do catálogo do modelo, não medidas (o display virtual reporta dpi sintético). */
+        val label get() = when {
+            !found -> "não detectado"
+            w == 1280 && h == 480 -> "widescreen ~8,8\" ($key)"
+            else -> "$key (perfil desconhecido)"
+        }
+    }
+
+    /** Geometria a aplicar num app, conforme o cluster: densidade + se deve encaixar vídeo em 16:9. */
+    data class AppGeom(val density: Int, val letterbox169: Boolean)
+
+    /** Densidade-base: mira ~480dp no lado curto (paisagem tipo tablet). 480px de altura → 160dpi. */
+    private fun baseDensity(h: Int): Int = (h * 160 / 480).coerceIn(140, 220)
+
+    private fun geomFor(pkg: String, h: Int): AppGeom {
+        val base = baseDensity(h)
+        val p = pkg.lowercase()
+        return when {
+            p.contains("waze") || p.contains("maps") || p.contains("navi") -> AppGeom((base - 10).coerceAtLeast(140), false)
+            p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
+            p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") -> AppGeom(base, true)
+            else -> AppGeom(base, false)
+        }
+    }
+
+    /** Objeto Display do cluster (pra ler a resolução real), ou null. */
+    private fun clusterDisplayObj(ctx: Context): Display? {
+        return try {
+            val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val pres = dm.getDisplays("android.hardware.display.category.PRESENTATION")
+            pres.firstOrNull { it.displayId > 0 && isClusterName(it.name) }
+                ?: pres.firstOrNull { it.displayId > 0 }
+                ?: dm.displays.firstOrNull { it.displayId > 0 && isClusterName(it.name) }
+        } catch (e: Exception) { null }
+    }
+
+    /** Lê o perfil do cluster já criado (resolução + densidade). Chamar depois do openSurface. */
+    private fun readProfile(ctx: Context): ClusterProfile {
+        val d = clusterDisplayObj(ctx) ?: return ClusterProfile(false, -1, 0, 0, 0)
+        val p = Point(); try { d.getRealSize(p) } catch (e: Exception) {}
+        val dens = try {
+            val dmetrics = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION") d.getRealMetrics(dmetrics)
+            dmetrics.densityDpi
+        } catch (e: Exception) { 0 }
+        return ClusterProfile(true, d.displayId, p.x, p.y, dens)
+    }
+
+    /** Aplica a geometria no display do cluster: densidade + letterbox 16:9 (ou limpa overscan). */
+    private fun applyGeom(ctx: Context, id: Int, w: Int, h: Int, g: AppGeom) {
+        AdbShell.run(ctx, "wm density ${g.density} -d $id 2>&1", 8000)
+        if (g.letterbox169 && w > 0 && h > 0) {
+            // Maior retângulo 16:9 dentro de w×h, centralizado → tarjas pretas nas laterais.
+            var vw = w; var vh = w * 9 / 16
+            if (vh > h) { vh = h; vw = h * 16 / 9 }
+            val padX = ((w - vw) / 2).coerceAtLeast(0)
+            val padY = ((h - vh) / 2).coerceAtLeast(0)
+            AdbShell.run(ctx, "wm overscan $padX,$padY,${w - vw - padX},${h - vh - padY} -d $id 2>&1", 8000)
+        } else {
+            AdbShell.run(ctx, "wm overscan reset -d $id 2>&1", 8000)
+        }
+    }
+
+    private fun resetGeom(ctx: Context, id: Int) {
+        if (id < 0) return
+        AdbShell.run(ctx, "wm density reset -d $id 2>&1; wm overscan reset -d $id 2>&1", 8000)
+    }
 
     // ---------- superfície do cluster ----------
 
@@ -237,7 +311,7 @@ object ClusterCast {
 
     // ---------- ações ----------
 
-    /** Joga o app que está na tela pro cluster: cria a superfície, resolve o launcher e relança no display 1. */
+    /** Joga o app que está na tela pro cluster: cria a superfície, detecta o perfil, ajusta e relança. */
     fun throwToCluster(ctx: Context): Result {
         val seqOk = openSurface(ctx)
         // O display só aparece depois do 35: o app de referência procura por até ~6s.
@@ -246,23 +320,31 @@ object ClusterCast {
         while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(200) }
         if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (sequência 16→35→46 ${if (seqOk) "respondeu ok" else "falhou em algum passo"})") }
 
+        // Perfil do cluster (resolução + densidade reais) — decide a geometria por tamanho.
+        val prof = readProfile(ctx)
         val pkg = foregroundPackage(ctx) ?: run { releaseSurface(ctx); return Result(false, "nenhum app em foco na tela") }
         val comp = resolveLaunchComponent(ctx, pkg) ?: run { releaseSurface(ctx); return Result(false, "sem activity pública em $pkg") }
+
+        // Ajusta densidade/letterbox conforme o perfil, ANTES de abrir o app.
+        val geom = geomFor(pkg, if (prof.found && prof.h > 0) prof.h else 480)
+        applyGeom(ctx, id, prof.w, prof.h, geom)
 
         // Move a stack e relança o launcher no display do cluster (o que de fato renderiza).
         moveStackToDisplay(ctx, pkg, id)
         val r = AdbShell.run(ctx, "am start --display $id -n $comp 2>&1", 10000)
         if (r.output.contains("Error", true) || r.output.contains("Exception", true)) {
-            releaseSurface(ctx)
+            resetGeom(ctx, id); releaseSurface(ctx)
             return Result(false, "falhei ao abrir no cluster: ${r.output.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: r.reason}")
         }
-        lastPkg = pkg; lastComp = comp
-        return Result(true, "$pkg → cluster #$id")
+        lastPkg = pkg; lastComp = comp; lastDisplayId = id
+        val extra = if (prof.found) " · ${prof.label} · dens ${geom.density}${if (geom.letterbox169) " · 16:9" else ""}" else ""
+        return Result(true, "$pkg → cluster$extra")
     }
 
-    /** Traz de volta pra tela principal o que foi jogado no cluster, e libera a superfície. */
+    /** Traz de volta pra tela principal o que foi jogado no cluster, reseta a geometria e libera. */
     fun bringBack(ctx: Context): Result {
         var moved = false
+        resetGeom(ctx, lastDisplayId)
         if (lastPkg.isNotEmpty()) {
             moveStackToDisplay(ctx, lastPkg, 0)
             val comp = lastComp.ifEmpty { resolveLaunchComponent(ctx, lastPkg) ?: lastPkg }
@@ -270,7 +352,7 @@ object ClusterCast {
             moved = !(r.output.contains("Error", true) || r.output.contains("Exception", true))
         }
         releaseSurface(ctx)
-        lastPkg = ""; lastComp = ""
+        lastPkg = ""; lastComp = ""; lastDisplayId = -1
         return Result(moved, if (moved) "voltou pra tela do carro" else "liberei o cluster")
     }
 
@@ -329,6 +411,17 @@ object ClusterCast {
 
         val id = clusterDisplayId(ctx)
         sb.append("\nDisplay do cluster detectado: ").append(if (id >= 0) "#$id" else "nenhum").append("\n")
+
+        // Perfil do cluster + geometria que seria aplicada ao app em foco.
+        val prof = readProfile(ctx)
+        sb.append("Perfil do cluster: ").append(prof.label)
+        if (prof.found) sb.append(" · densidade ${prof.density}dpi")
+        sb.append("\n")
+        val pkgNow = foregroundPackage(ctx)
+        if (prof.found && pkgNow != null) {
+            val g = geomFor(pkgNow, prof.h)
+            sb.append("Geometria p/ $pkgNow: densidade ${g.density}${if (g.letterbox169) " · letterbox 16:9" else ""}\n")
+        }
 
         sb.append("\n[shell] app em primeiro plano (tentativas):\n")
         val fgRaw = AdbShell.run(ctx, "dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mFocusedApp|topResumed' | head; echo '--- window ---'; dumpsys window 2>/dev/null | grep -iE 'mCurrentFocus|mFocusedApp' | head", 9000)
