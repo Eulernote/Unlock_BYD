@@ -64,12 +64,31 @@ object ClusterCast {
 
     /** Procura o display do cluster pelo DisplayManager (não precisa de ADB). -1 se não achar. */
     fun clusterDisplayId(ctx: Context): Int {
-        return try {
+        // 1) DisplayManager (só enxerga displays públicos ao app).
+        try {
             val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
             val match = dm.displays.filter { isClusterName(it.name) }
-            // Prefere um display secundário (id > 0).
-            (match.firstOrNull { it.displayId > 0 } ?: match.firstOrNull())?.displayId ?: -1
-        } catch (e: Exception) { -1 }
+            val id = (match.firstOrNull { it.displayId > 0 } ?: match.firstOrNull())?.displayId ?: -1
+            if (id > 0) return id
+        } catch (e: Exception) {}
+        // 2) Shell dumpsys: enxerga displays PRIVADOS (o cluster do BYD costuma ser privado).
+        return clusterDisplayIdShell(ctx)
+    }
+
+    /** Lê os displays pelo shell (dumpsys), que vê o display privado do cluster. -1 se não achar. */
+    private fun clusterDisplayIdShell(ctx: Context): Int {
+        // Extrai pares (displayId, nome) do dumpsys display.
+        val r = AdbShell.run(ctx, "dumpsys display | grep -oE 'displayId [0-9]+[^,}]*' | head -40", 8000)
+        val ids = mutableListOf<Pair<Int, String>>()
+        for (line in r.output.lines()) {
+            val m = Regex("""displayId\s+(\d+)(.*)""").find(line) ?: continue
+            val id = m.groupValues[1].toIntOrNull() ?: continue
+            ids.add(id to line.lowercase())
+        }
+        // Preferência: um display cujo nome/linha pareça de cluster.
+        ids.firstOrNull { isClusterName(it.second) }?.let { return it.first }
+        // Senão: o menor display id > 0 (o cluster costuma ser o display 1/2).
+        return ids.map { it.first }.filter { it > 0 }.minOrNull() ?: -1
     }
 
     /** Lista dos displays (id + nome), pro diagnóstico. */
@@ -84,14 +103,22 @@ object ClusterCast {
 
     /** (taskId, "pacote/atividade") do app em primeiro plano, ou null. Ignora o próprio Unlock BYD. */
     private fun foreground(ctx: Context): Pair<Int, String>? {
-        val r = AdbShell.run(ctx, "dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity|ResumedActivity' 2>/dev/null", 8000)
-        val out = r.output
-        if (out.isBlank()) return null
-        // Linha típica: "...ResumedActivity: ActivityRecord{abc u0 com.google.android.youtube/.UrlActivity t123}"
-        val comp = Regex("""([a-zA-Z0-9_.]+/[a-zA-Z0-9_.$]+)""").find(out)?.groupValues?.getOrNull(1) ?: return null
-        if (comp.startsWith(ctx.packageName)) return null
-        val taskId = Regex("""\bt(\d+)""").find(out)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
-        return Pair(taskId, comp)
+        // Vários formatos conforme o firmware (DiLink 3/4/5).
+        val cmds = listOf(
+            "dumpsys activity activities | grep -E 'ResumedActivity|topResumedActivity|mResumedActivity'",
+            "dumpsys activity activities | grep -E 'mFocusedApp|ResumedActivity'",
+            "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'",
+            "dumpsys activity top | grep -E 'ACTIVITY '"
+        )
+        for (c in cmds) {
+            val out = AdbShell.run(ctx, "$c 2>/dev/null", 8000).output
+            if (out.isBlank()) continue
+            val comp = Regex("""([a-zA-Z0-9_.]+/[a-zA-Z0-9_.$]+)""").find(out)?.groupValues?.getOrNull(1) ?: continue
+            if (comp.startsWith(ctx.packageName)) continue
+            val taskId = Regex("""\bt(\d+)""").find(out)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
+            return Pair(taskId, comp)
+        }
+        return null
     }
 
     // ---------- ações ----------
@@ -148,11 +175,24 @@ object ClusterCast {
             sb.append("  $svc code $code → ${if (r.ok) "ok" else "falhou"}: $resumo\n")
         }
         Thread.sleep(800)
-        sb.append("\nDisplays depois de abrir:\n").append(displaysText(ctx)).append("\n")
+        sb.append("\nDisplays (app) depois de abrir:\n").append(displaysText(ctx)).append("\n")
+
+        // Lista crua pelo shell: enxerga displays privados (o cluster).
+        sb.append("\n[shell] dumpsys display (displays lógicos):\n")
+        val dd = AdbShell.run(ctx, "dumpsys display | grep -iE 'Logical Display|displayId|mBaseDisplayInfo|uniqueId|type=|FLAG_PRIVATE|FLAG_PRESENTATION' | head -50", 9000)
+        sb.append(dd.output.ifBlank { "(vazio) ${dd.reason}" }).append("\n")
+        sb.append("\n[shell] SurfaceFlinger:\n")
+        val sf = AdbShell.run(ctx, "dumpsys SurfaceFlinger --display-id 2>/dev/null; dumpsys SurfaceFlinger 2>/dev/null | grep -iE 'Display .*: ' | head", 9000)
+        sb.append(sf.output.ifBlank { "(vazio)" }).append("\n")
+
         val id = clusterDisplayId(ctx)
         sb.append("\nDisplay do cluster detectado: ").append(if (id >= 0) "#$id" else "nenhum").append("\n")
+
+        sb.append("\n[shell] app em primeiro plano (tentativas):\n")
+        val fgRaw = AdbShell.run(ctx, "dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mFocusedApp|topResumed' | head; echo '--- window ---'; dumpsys window 2>/dev/null | grep -iE 'mCurrentFocus|mFocusedApp' | head", 9000)
+        sb.append(fgRaw.output.ifBlank { "(vazio)" }).append("\n")
         val fg = foreground(ctx)
-        sb.append("App em primeiro plano: ").append(fg?.second ?: "não identificado").append(fg?.let { " (task ${it.first})" } ?: "").append("\n")
+        sb.append("App em primeiro plano (lido): ").append(fg?.second ?: "não identificado").append(fg?.let { " (task ${it.first})" } ?: "").append("\n")
         releaseSurface(ctx)
         return sb.toString()
     }
