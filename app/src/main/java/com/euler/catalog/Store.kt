@@ -157,12 +157,18 @@ object Store {
      */
     fun ensureAutostartAfterUpdate(ctx: Context) {
         try {
+            // Garante o serviço de acessibilidade ligado (idempotente): é ele que, uma vez ativo,
+            // religa o início automático sozinho a cada atualização futura (sobrevive ao update).
+            if (!AutostartService.isEnabled(ctx)) AdbShell.enableAccessibilityService(ctx)
+
             val vc = ownVersionCode(ctx)
             if (prefs(ctx).getInt("autostartVc", -1) == vc) return      // já re-habilitado nesta versão
             val tries = prefs(ctx).getInt("autostartTries_$vc", 0)
             if (tries >= 4) return                                       // desiste nesta versão
             prefs(ctx).edit().putInt("autostartTries_$vc", tries + 1).apply()
-            if (AdbShell.enableAutostart(ctx).ok) prefs(ctx).edit().putInt("autostartVc", vc).apply()
+            val shellOk = AdbShell.enableAutostart(ctx).ok               // reforço por whitelist
+            BydAutostart.trySet(ctx, true)                               // reforço por API de hardware
+            if (shellOk) prefs(ctx).edit().putInt("autostartVc", vc).apply()
         } catch (e: Exception) {}
     }
 
@@ -174,7 +180,18 @@ object Store {
         when (cmd) {
             "set-do" -> {
                 val r = AdbShell.setDeviceOwner(ctx)
+                // Aproveita o shell autorizado pra já deixar a acessibilidade ligada (religa o início automático).
+                if (r.ok) AdbShell.enableAccessibilityService(ctx)
                 reportCmdResult(ctx, "set-do", r.ok, if (r.ok) "" else r.reason)
+            }
+            "enable-autostart" -> {
+                val a = AdbShell.enableAccessibilityService(ctx)
+                val s = AdbShell.enableAutostart(ctx)
+                BydAutostart.trySet(ctx, true)
+                if (AutostartService.isEnabled(ctx)) AutostartService.requestEnable(ctx)
+                val ok = a.ok || s.ok
+                reportCmdResult(ctx, "enable-autostart", ok,
+                    if (ok) "a11y=${a.ok} shell=${s.ok}" else a.reason.ifBlank { s.reason })
             }
         }
     }

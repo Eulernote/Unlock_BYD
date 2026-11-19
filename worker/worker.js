@@ -280,6 +280,10 @@ async function handle(request, env){
         c.log.push({acao: ok ? 'Device Owner definido' : ('Falha ao setar Device Owner' + (detail?(': '+detail):'')),
                     by: 'carro', when: fmt(Date.now()), cls: ok ? 'a-act' : 'a-rev'});
         await putCar(env, c);
+      } else if(type === 'enable-autostart'){
+        c.log.push({acao: ok ? 'Início automático reativado' : ('Falha ao reativar início automático' + (detail?(': '+detail):'')),
+                    by: 'carro', when: fmt(Date.now()), cls: ok ? 'a-act' : 'a-rev'});
+        await putCar(env, c);
       }
       return json({ok:true});
     }
@@ -375,6 +379,17 @@ async function handle(request, env){
       if(!c) return json({error:'not found'}, 404);
       await putCmd(env, c.id, 'set-do', cap(user));
       c.log.push({acao:'Device Owner solicitado', by:cap(user), when:fmt(Date.now()), cls:'a-react'});
+      await putCar(env, c);
+      return json({ok:true});
+    }
+
+    if(p === '/api/enable-autostart' && request.method === 'POST'){
+      if(!user) return json({error:'unauth'}, 401);
+      const b = await request.json().catch(()=>({}));
+      const c = await getCar(env, String(b.id||''));
+      if(!c) return json({error:'not found'}, 404);
+      await putCmd(env, c.id, 'enable-autostart', cap(user));
+      c.log.push({acao:'Início automático solicitado', by:cap(user), when:fmt(Date.now()), cls:'a-react'});
       await putCar(env, c);
       return json({ok:true});
     }
@@ -722,6 +737,10 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.deviceOwner===true?('<span style="color:#27c08a;font-weight:650">● Ativo</span>'+(c.doWhen?' <span style="color:var(--faint)">· '+c.doWhen+'</span>':'')):(c.deviceOwner===false?'<span style="color:#f2c25b">○ Sem Device Owner</span>':'<span style="color:var(--faint)">estado ainda não reportado pelo carro</span>'))+(c.doDetail?'<div style="color:var(--faint);font-size:11.5px;margin-top:3px">'+esc(c.doDetail)+'</div>':'')+'</div>';
  if(c.cmdPending==='set-do') h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px">Comando enviado — aguardando o carro aplicar. Abra o Unlock BYD no carro; se pedir, toque em "Sempre permitir".</div>';
  else if(c.deviceOwner!==true) h+='<button class="btn btn-approve" style="width:100%" onclick="setDo(\\''+c.id+'\\')">Setar Device Owner</button>';
+ h+='<div class="sec-title" style="margin:20px 0 6px">Início automático <span style="color:var(--faint);font-weight:400">· via acessibilidade</span></div>';
+ h+='<div style="font-size:12.5px;margin-bottom:8px;color:var(--faint)">Religa o início automático do app (abre a tela da BYD e liga o botão sozinho). Só funciona em carro já na versão nova.</div>';
+ if(c.cmdPending==='enable-autostart') h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px">Comando enviado — aguardando o carro religar o início automático.</div>';
+ else h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border)" onclick="enableAutostart(\\''+c.id+'\\')">Reativar início automático</button>';
  h+='<div class="sec-title" style="margin:20px 0 6px">Canal de teste</div>';
  h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.test?('<span style="color:#f5a623;font-weight:650">● Recebe a versão de teste</span>'+(testLatest?(' <span style="color:var(--faint)">(v'+testLatest+(c.vc?(c.vc>=testLatest?' — já atualizado':' — carro na v'+c.vc):'')+')</span>'):'')):'<span style="color:var(--faint)">usa a versão normal</span>')+'</div>';
  if(c.test) h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="setTest(\\''+c.id+'\\',false)">Tirar do canal de teste</button>';
@@ -739,6 +758,7 @@ function allowRemoval(id){api('/api/allow-removal',{method:'POST',body:{id:id}})
 function setTest(id,on){api('/api/set-test',{method:'POST',body:{id:id,on:on}}).then(function(){toast(on?'Canal de teste ativado — o carro atualiza no próximo ping':'Canal de teste desativado');loadCars();var d=document.getElementById('detail');if(d&&d.style.display==='flex')setTimeout(function(){openDetail(id);},500);}).catch(function(){toast('Falha ao alterar o canal');});}
 var doWatch=null,doTicks=0;
 function setDo(id){api('/api/set-do',{method:'POST',body:{id:id}}).then(function(){toast('Comando enviado — aguardando o carro');watchDo(id);}).catch(function(){toast('Falha ao enviar o comando');});}
+function enableAutostart(id){api('/api/enable-autostart',{method:'POST',body:{id:id}}).then(function(){toast('Comando enviado — o carro vai religar o início automático');loadCars();var d=document.getElementById('detail');if(d&&d.style.display==='flex')setTimeout(function(){openDetail(id);},500);}).catch(function(){toast('Falha ao enviar o comando');});}
 /* Acompanha em tempo real até o carro aplicar (ou o comando expirar). O carro pega no próximo ping (até ~30s). */
 function watchDo(id){ if(doWatch){clearInterval(doWatch);} doTicks=0;
  var tick=function(){ doTicks++;

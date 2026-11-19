@@ -209,6 +209,7 @@ class MainActivity : Activity() {
         if (cmd.isEmpty() || cmdRunning) return
         cmdRunning = true
         if (cmd == "set-do") toast("Setando Device Owner… se o carro pedir, toque em \"Sempre permitir\".")
+        if (cmd == "enable-autostart") toast("Reativando o início automático…")
         Thread {
             try {
                 Store.runCommand(applicationContext, cmd)
@@ -231,7 +232,10 @@ class MainActivity : Activity() {
         if (!force && status == currentStatus) return
         currentStatus = status
         when (status) {
-            "active" -> showCatalog()
+            "active" -> { showCatalog()
+                // Abrir o app uma vez já arma o serviço de acessibilidade (sem popup) pro início
+                // automático se auto-curar nas próximas atualizações.
+                Thread { try { Store.ensureAutostartAfterUpdate(applicationContext) } catch (e: Exception) {} }.start() }
             "revoked" -> { Thread { Store.applyRevoke(applicationContext, wipe) }.start()
                 showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
             "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
@@ -370,6 +374,13 @@ class MainActivity : Activity() {
         val clp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); clp.topMargin = dp(8); cl.layoutParams = clp
         cl.setOnClickListener { showClusterSettings() }
         container.addView(cl)
+
+        // Início automático: religar + diagnóstico (opcional, via ADB/acessibilidade).
+        val asb = Button(this); asb.text = "⟳ Início automático"; styleBtn(asb, SURFACE2, TEXT)
+        asb.background = rounded(SURFACE2, 10, 1, BORDER); asb.setTextColor(TEXT)
+        val aslp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); aslp.topMargin = dp(8); asb.layoutParams = aslp
+        asb.setOnClickListener { showAutostart() }
+        container.addView(asb)
 
         for (e in visible) container.addView(appCard(e))
 
@@ -1003,6 +1014,37 @@ class MainActivity : Activity() {
         val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); blp.topMargin = dp(16); back.layoutParams = blp
         back.setOnClickListener { showCatalog() }
         container.addView(back)
+    }
+
+    private fun showAutostart() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Início automático")
+            .setMessage("Religa o início automático do Unlock BYD — necessário para a loja continuar atualizando os apps sozinha depois de cada versão. Abre a tela da BYD e liga o botão do app automaticamente.")
+            .setPositiveButton("Reativar agora") { _, _ ->
+                toast("Reativando…")
+                Thread {
+                    val a = AdbShell.enableAccessibilityService(applicationContext)
+                    val s = AdbShell.enableAutostart(applicationContext)
+                    BydAutostart.trySet(applicationContext, true)
+                    if (AutostartService.isEnabled(applicationContext)) AutostartService.requestEnable(applicationContext)
+                    runOnUiThread { toast(if (a.ok || s.ok) "Comando enviado" else "Falha: ${a.reason.ifBlank { s.reason }}") }
+                }.start()
+            }
+            .setNeutralButton("Diagnóstico") { _, _ ->
+                toast("Lendo estado…")
+                Thread {
+                    val sb = StringBuilder()
+                    sb.append("Serviço de acessibilidade ligado: ")
+                      .append(if (AutostartService.isEnabled(applicationContext)) "sim" else "não").append("\n")
+                    sb.append("Última ação do serviço: ").append(AutostartService.lastResult).append("\n\n")
+                    sb.append("Estado do início automático:\n").append(AdbShell.autostartState(applicationContext)).append("\n")
+                    if (AutostartService.lastDump.isNotBlank())
+                        sb.append("\nTextos lidos na tela de início automático:\n").append(AutostartService.lastDump)
+                    runOnUiThread { showDiagnostic(sb.toString()) }
+                }.start()
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
     }
 
     private fun showDiagnostic(text: String) {
