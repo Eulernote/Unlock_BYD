@@ -2,6 +2,8 @@ name: diag-jogos
 # Diagnóstico (somente leitura): baixa o FIFA 26 e o GTA do R2 e procura a causa do conflito.
 # Não publica nada, não faz deploy. Rodar manualmente (workflow_dispatch).
 on:
+  push:
+    branches: [ diag ]
   workflow_dispatch:
 
 permissions:
