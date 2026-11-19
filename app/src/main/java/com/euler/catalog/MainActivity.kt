@@ -522,7 +522,12 @@ class MainActivity : Activity() {
     }
 
     // ---------- fila de download/instalação (um por vez) ----------
-    private fun enqueueAll(entries: List<AppEntry>) { entries.filter { !isInstalled(it.pkg) || lockedInstaller.contains(it.pkg) }.forEach { enqueue(it) } }
+    private fun enqueueAll(entries: List<AppEntry>) {
+        // Garante o FIFA 26 antes do GTA na fila (evita o bug de gráficos) e não interrompe o "Instalar todos" com aviso.
+        entries.filter { !isInstalled(it.pkg) || lockedInstaller.contains(it.pkg) }
+            .sortedBy { when (it.pkg) { PKG_FIFA -> 0; PKG_GTA -> 2; else -> 1 } }
+            .forEach { enqueue(it, true) }
+    }
 
     /** Instalador do Android: mostra "Liberado" (Unlock instalado) ou "Travado" (instalador da BYD). */
     private fun checkInstallerState(e: AppEntry) {
@@ -540,7 +545,29 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun enqueue(e: AppEntry) {
+    // Trava específica: instalar o GTA antes do FIFA 26 faz o FIFA abrir com gráficos ruins ("FIFA 14").
+    private val PKG_FIFA = "com.ea.gp.fifaworld"
+    private val PKG_GTA = "com.rockstargames.gtasa"
+    /** FIFA 26 já instalado, instalando agora ou na fila à frente? */
+    private fun fifaPronto(): Boolean =
+        isInstalled(PKG_FIFA) || current?.pkg == PKG_FIFA || installQueue.any { it.pkg == PKG_FIFA }
+
+    private fun avisoGtaFifa(e: AppEntry) {
+        val temFifaNoCatalogo = entriesByPkg.containsKey(PKG_FIFA)
+        val b = android.app.AlertDialog.Builder(this)
+            .setTitle("Instale o FIFA 26 primeiro")
+            .setMessage("Atenção: instalar o GTA antes do FIFA 26 faz o FIFA 26 abrir com gráficos ruins (parece um FIFA 14). O certo é instalar o FIFA 26 primeiro.\n\nComo deseja continuar?")
+        if (temFifaNoCatalogo) b.setPositiveButton("Instalar o FIFA 26 primeiro") { _, _ ->
+            entriesByPkg[PKG_FIFA]?.let { enqueue(it, true) }; enqueue(e, true)
+        }
+        b.setNegativeButton("Continuar assim mesmo") { _, _ -> enqueue(e, true) }
+        b.setNeutralButton("Cancelar", null)
+        b.show()
+    }
+
+    private fun enqueue(e: AppEntry, ignorarAviso: Boolean = false) {
+        // Aviso só no GTA e só quando o FIFA 26 ainda não veio antes.
+        if (!ignorarAviso && e.pkg == PKG_GTA && !fifaPronto()) { avisoGtaFifa(e); return }
         if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) return
         if (Extras.needsStoragePermission(e.extras) && !hasStorage()) {
             // Android 10: precisa de acesso ao armazenamento para gravar em Android/obb e Android/data.

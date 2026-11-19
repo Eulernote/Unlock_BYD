@@ -4,7 +4,7 @@ name: build-teste
 # como "canal de teste" no painel recebem este APK; os demais seguem na versão normal.
 on:
   push:
-    branches: [ shell-adb-do ]
+    branches: [ shell-adb-do, fix-fifa-gta ]
   workflow_dispatch:
 
 permissions:
