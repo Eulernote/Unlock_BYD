@@ -1,7 +1,7 @@
 name: build-teste
-# Compila o APK de uma branch de teste e disponibiliza como artefato para baixar.
-# NÃO publica no R2, NÃO mexe no app_version.json e NÃO toca na branch apk/main.
-# Os carros continuam na versão de produção — este APK é só para instalar manualmente num carro de teste.
+# Compila o APK da branch de teste, disponibiliza como artefato e publica no R2 como CANAL DE TESTE.
+# NÃO mexe no app_version.json (produção) nem na branch apk/main. Só os carros que você marcar
+# como "canal de teste" no painel recebem este APK; os demais seguem na versão normal.
 on:
   push:
     branches: [ shell-adb-do ]
@@ -13,6 +13,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      WORKER_BASE: https://euler-catalog.eulerfilhogontijodamata.workers.dev
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +24,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -35,3 +43,20 @@ jobs:
           name: Unlock_BYD-teste
           path: app/build/outputs/apk/debug/Unlock_BYD-teste.apk
           if-no-files-found: error
+
+      - name: Publicar no R2 (canal de teste)
+        if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
+        run: |
+          set -e
+          npm i -g wrangler@4
+          VC=$(grep -oP 'versionCode\s*=\s*\K[0-9]+' app/build.gradle.kts)
+          echo "versionCode de teste: $VC"
+          # 1) APK primeiro
+          wrangler r2 object put "unlock-byd/app/Unlock_BYD-teste.apk" \
+            --file app/build/outputs/apk/debug/Unlock_BYD-teste.apk --remote \
+            --content-type application/vnd.android.package-archive
+          # 2) ponteiro da versão de teste (o worker lê isto para os carros do canal de teste)
+          printf '{"versionCode":%s,"url":"%s/f/app/Unlock_BYD-teste.apk"}' "$VC" "$WORKER_BASE" > app_version_test.json
+          wrangler r2 object put "unlock-byd/app_version_test.json" \
+            --file app_version_test.json --remote \
+            --content-type "application/json; charset=utf-8"

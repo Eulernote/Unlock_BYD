@@ -12,8 +12,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/** Resultado do registro/heartbeat no servidor. cmd = comando pendente do painel (ex.: "set-do"), vazio se nenhum. */
-data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String, val cmd: String = "")
+/** Resultado do registro/heartbeat no servidor.
+ *  cmd = comando pendente do painel (ex.: "set-do"); testVc/testUrl = versão de teste direcionada a este carro. */
+data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String,
+                     val cmd: String = "", val testVc: Int = 0, val testUrl: String = "")
 
 /** Lógica compartilhada: ativação no servidor + catálogo + remoção de apps. */
 object Store {
@@ -121,7 +123,8 @@ object Store {
             val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$dev$ver}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
-            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"), o.optString("cmd", ""))
+            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"),
+                o.optString("cmd", ""), o.optInt("tvc", 0), o.optString("turl", ""))
         } catch (e: Exception) { RegResult("error", false, "basico", "byd_simples") }
     }
 
