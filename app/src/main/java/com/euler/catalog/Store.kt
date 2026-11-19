@@ -63,6 +63,13 @@ object Store {
     }
     fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").remove("grupo").remove("ask").apply() }
 
+    // ---- projeção no cluster ----
+    fun clusterEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean("clusterEnabled", false)
+    fun setClusterEnabled(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("clusterEnabled", v).apply() }
+    /** Modo de acionamento: "icon" (ícone flutuante) ou "gesture" (gesto — em breve). */
+    fun clusterMode(ctx: Context): String = prefs(ctx).getString("clusterMode", "icon") ?: "icon"
+    fun setClusterMode(ctx: Context, m: String) { prefs(ctx).edit().putString("clusterMode", m).apply() }
+
     /** App do catálogo (para auto-atualização): pacote, url e número de build. */
     data class CatApp(val pkg: String, val url: String, val build: Int)
     fun catalogApps(): List<CatApp> {

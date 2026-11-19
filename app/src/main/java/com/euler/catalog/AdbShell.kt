@@ -109,6 +109,13 @@ object AdbShell {
         return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
     }
 
+    /** Concede a permissão de "sobrepor outras telas" a este app, silenciosamente, via ADB. */
+    fun grantOverlay(ctx: Context): Result {
+        val pkg = ctx.packageName
+        return run(ctx, "appops set $pkg SYSTEM_ALERT_WINDOW allow 2>/dev/null ; echo UBYD_OK", 15000)
+            .let { if (it.output.contains("UBYD_OK")) Result(true, it.output) else it }
+    }
+
     private fun parseDpmError(out: String): String = when {
         out.contains("already", true) && out.contains("owner", true) -> "já existe um owner/admin definido"
         out.contains("account", true) -> "há conta(s) cadastradas no carro — remova antes"
