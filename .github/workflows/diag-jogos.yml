@@ -1,0 +1,68 @@
+name: diag-jogos
+# Diagnóstico (somente leitura): baixa o FIFA 26 e o GTA do R2 e procura a causa do conflito.
+# Não publica nada, não faz deploy. Rodar manualmente (workflow_dispatch).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ferramentas
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q jq unzip
+          pip install -q androguard 2>/dev/null || pip install -q --break-system-packages androguard
+
+      - name: Baixar catálogo e analisar
+        run: |
+          set +e
+          B=https://euler-catalog.eulerfilhogontijodamata.workers.dev
+          curl -s "$B/catalog.json" -o catalog.json
+          echo "===== TODOS OS APPS (nome | pacote | url) ====="
+          jq -r '.apps[] | [.name, .package, .url] | @tsv' catalog.json
+          echo
+          echo "===== EXTRAS (data/obb) ====="
+          jq -r '.apps[] | select(.extras) | .name as $n | .extras[] | [$n, (.destino // "download"), .pasta, .nome, .url] | @tsv' catalog.json
+          echo
+
+          cat > man.py <<'PY'
+          import sys
+          from androguard.core.apk import APK
+          a=APK(sys.argv[1])
+          print("package:", a.get_package(), "| versionName:", a.get_androidversion_name())
+          x=a.get_android_manifest_xml()
+          print("sharedUserId:", x.get('{http://schemas.android.com/apk/res/android}sharedUserId'))
+          perms=[p for p in a.get_permissions() if any(k in p for k in ("STORAGE","MANAGE","INSTALL"))]
+          print("perms storage:", perms)
+          prov=a.get_providers(); print("providers:", prov[:6])
+          PY
+
+          analyze () {
+            label="$1"; url="$2"
+            echo; echo "########## $label ##########"; echo "URL: $url"
+            curl -sL "$url" -o game.apk
+            echo "tamanho: $(du -h game.apk | cut -f1)"
+            echo "--- manifest ---"; python3 -I man.py game.apk 2>/dev/null
+            echo "--- libs nativas ---"; unzip -l game.apk 2>/dev/null | grep -oE "lib/[^/]+/[^ ]+\.so" | sed 's#lib/[^/]*/##' | sort -u | head -40
+            echo "--- engine (unity/unreal/etc) ---"; unzip -l game.apk 2>/dev/null | grep -ioE "libunity.so|libUE4.so|libil2cpp.so|libgodot|assets/bin/Data|libcocos|libgdx|UnityPlayer" | sort -u | head
+            mkdir -p ex_$label && (cd ex_$label && unzip -o -q ../game.apk 'classes*.dex' 'lib/*' 2>/dev/null)
+            echo "--- caminhos de armazenamento (strings) ---"
+            grep -rhoaE "(/sdcard|/storage/emulated/0|Android/obb|Android/data|/Download|/Android/)[A-Za-z0-9_./ -]{0,60}" ex_$label 2>/dev/null | sed 's/ *$//' | sort -u > paths_$label.txt
+            head -80 paths_$label.txt
+            rm -rf ex_$label game.apk
+          }
+
+          FIFA_URL=$(jq -r '.apps[] | select((.name|test("fifa";"i")) and (.name|test("26"))) | .url' catalog.json | head -1)
+          [ -z "$FIFA_URL" ] && FIFA_URL=$(jq -r '.apps[] | select(.name|test("fifa.?26|fifa 2026|dfl";"i")) | .url' catalog.json | head -1)
+          GTA_URL=$(jq -r '.apps[] | select(.name|test("gta|san.?andreas";"i")) | .url' catalog.json | head -1)
+          echo; echo "FIFA_URL=$FIFA_URL"; echo "GTA_URL=$GTA_URL"
+
+          [ -n "$FIFA_URL" ] && analyze FIFA "$FIFA_URL" || echo "!! FIFA 26 não encontrado pelo filtro — veja a lista acima e me diga o nome exato"
+          [ -n "$GTA_URL" ] && analyze GTA "$GTA_URL" || echo "!! GTA não encontrado pelo filtro — veja a lista acima"
+
+          echo; echo "===== CAMINHOS EM COMUM (suspeito nº1: pasta compartilhada fora do sandbox) ====="
+          if [ -f paths_FIFA.txt ] && [ -f paths_GTA.txt ]; then comm -12 paths_FIFA.txt paths_GTA.txt; else echo "(faltou baixar um dos dois)"; fi
