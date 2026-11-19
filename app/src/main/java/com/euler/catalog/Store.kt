@@ -65,6 +65,11 @@ object Store {
     }
     fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").remove("grupo").remove("ask").apply() }
 
+    // ---- trava FIFA 26 x GTA ----
+    /** Fica true quando o GTA é instalado sem o FIFA 26 antes: o FIFA 26 fica indisponível neste carro. */
+    fun fifaBlocked(ctx: Context): Boolean = prefs(ctx).getBoolean("fifaBlocked", false)
+    fun setFifaBlocked(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("fifaBlocked", v).apply() }
+
     // ---- projeção no cluster ----
     fun clusterEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean("clusterEnabled", false)
     fun setClusterEnabled(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("clusterEnabled", v).apply() }

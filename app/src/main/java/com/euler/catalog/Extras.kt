@@ -67,14 +67,14 @@ object Extras {
 
     private fun androidName(): String = "Android " + (Build.VERSION.RELEASE ?: Build.VERSION.SDK_INT.toString())
 
-    /** Baixa o extra para o destino. report recebe o texto de progresso ("Baixando X… 40%"). */
-    fun fetch(ctx: Context, ex: Extra, pkg: String, report: (String) -> Unit): Result {
+    /** Baixa o extra para o destino. report recebe o texto de progresso ("Baixando X… 40%"). cancel() = cancelar agora. */
+    fun fetch(ctx: Context, ex: Extra, pkg: String, cancel: () -> Boolean = { false }, report: (String) -> Unit): Result {
         lastError = null
         return try {
             val r = when (ex.destino) {
-                "obb" -> special(ctx, ex, pkg, "obb", report)
-                "data" -> special(ctx, ex, pkg, "data", report)
-                else -> Result(toDownloads(ctx, ex.url, downloadsRel(ex.pasta), ex.nome) { p, b -> report(progressText("Baixando", ex.nome, p, b)) })
+                "obb" -> special(ctx, ex, pkg, "obb", cancel, report)
+                "data" -> special(ctx, ex, pkg, "data", cancel, report)
+                else -> Result(toDownloads(ctx, ex.url, downloadsRel(ex.pasta), ex.nome, cancel) { p, b -> report(progressText("Baixando", ex.nome, p, b)) })
             }
             if (!r.ok && r.erro == null) r.copy(erro = lastError) else r
         } catch (e: DlError) { Result(false, erro = e.message) }
@@ -82,7 +82,7 @@ object Extras {
     }
 
     // ---------- OBB / data ----------
-    private fun special(ctx: Context, ex: Extra, pkg: String, kind: String, report: (String) -> Unit): Result {
+    private fun special(ctx: Context, ex: Extra, pkg: String, kind: String, cancel: () -> Boolean, report: (String) -> Unit): Result {
         val isZip = ex.nome.endsWith(".zip", true)
         @Suppress("DEPRECATION")
         val root = File(Environment.getExternalStorageDirectory(), "Android/$kind/$pkg")
@@ -92,7 +92,7 @@ object Extras {
             val ok = try {
                 if (!root.exists()) root.mkdirs()
                 if (!root.isDirectory || !root.canWrite()) false
-                else if (isZip) zipTo(ctx, ex, pkg, root, report) { rel, inp -> writeFile(File(root, rel), inp) }
+                else if (isZip) zipTo(ctx, ex, pkg, root, cancel, report) { rel, inp -> writeFile(File(root, rel), inp) }
                 else {
                     val dest = File(root, ex.nome)
                     val remote = remoteSize(ex.url)
@@ -100,7 +100,7 @@ object Extras {
                     else {
                         checkSpace(root, remote - (if (dest.exists()) dest.length() else 0L))
                         val tmp = File(root, ex.nome + ".part")
-                        val okd = downloadFile(ex.url, tmp) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
+                        val okd = downloadFile(ex.url, tmp, cancel) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
                         if (okd) { dest.delete(); tmp.renameTo(dest) } else false
                     }
                 }
@@ -109,11 +109,11 @@ object Extras {
         }
         // Sem acesso direto: salva em Download/<pasta>/<pacote>/ para o usuário mover.
         val baseRel = downloadsRel(ex.pasta.ifEmpty { pkg }) + pkg + "/"
-        val ok = if (isZip) zipTo(ctx, ex, pkg, null, report) { r, inp ->
+        val ok = if (isZip) zipTo(ctx, ex, pkg, null, cancel, report) { r, inp ->
                 val sub = r.substringBeforeLast('/', ""); val name = r.substringAfterLast('/')
                 writeToDownloads(ctx, baseRel + (if (sub.isNotEmpty()) "$sub/" else ""), name, inp)
             }
-            else toDownloads(ctx, ex.url, baseRel, ex.nome) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
+            else toDownloads(ctx, ex.url, baseRel, ex.nome, cancel) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
         if (!ok) return Result(false)
         val pastaTxt = "Download → " + (ex.pasta.ifEmpty { pkg })
         val manual = "Este carro (${androidName()}) não permite a instalação automática da pasta $kind. Os arquivos foram colocados na pasta Download.\n\n" +
@@ -151,14 +151,14 @@ object Extras {
     }
 
     /** Baixa o zip para o cache, descompacta entrada por entrada com write(caminho relativo, conteúdo) e apaga o zip. */
-    private fun zipTo(ctx: Context, ex: Extra, pkg: String, root: File?, report: (String) -> Unit, write: (String, InputStream) -> Boolean): Boolean {
+    private fun zipTo(ctx: Context, ex: Extra, pkg: String, root: File?, cancel: () -> Boolean, report: (String) -> Unit, write: (String, InputStream) -> Boolean): Boolean {
         val tmp = File(ctx.cacheDir, "x_" + ex.nome.hashCode() + ".zip")
         var keepPart = false
         try {
             // zip baixado + conteúdo extraído: precisa de ~2x o tamanho (descontando o que já foi baixado antes)
             val remote = remoteSize(ex.url)
             if (remote > 0) checkSpace(ctx.cacheDir, remote * 2 - (if (tmp.exists()) tmp.length() else 0L))
-            val okd = downloadFile(ex.url, tmp) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
+            val okd = downloadFile(ex.url, tmp, cancel) { p, b -> report(progressText("Baixando", ex.nome, p, b)) }
             if (!okd) { keepPart = true; return false }   // mantém o pedaço baixado para retomar na próxima tentativa
             ZipFile(tmp).use { zf ->
                 val entries = zf.entries().toList().filter { !it.isDirectory && !it.name.contains("..") }
@@ -169,6 +169,7 @@ object Extras {
                 fun tick() { val pct = ((done * 100) / total).toInt().coerceIn(0, 100); if (pct != lastPct) { lastPct = pct; report("Extraindo ${ex.nome}…  $pct%") } }
                 tick()
                 for (en in entries) {
+                    if (cancel()) return false
                     val rel = map(en.name)
                     if (rel == null || rel.isEmpty()) { done += maxOf(en.size, 0L); tick(); continue }
                     // conta os bytes enquanto extrai, para a porcentagem andar mesmo em arquivos enormes (ex.: um .obb de 1 GB)
@@ -215,7 +216,7 @@ object Extras {
     private fun downloadsRel(pasta: String) = Environment.DIRECTORY_DOWNLOADS + "/" + (if (pasta.isNotEmpty()) "$pasta/" else "")
 
     /** Baixa url para Download/<rel>/<nome>. Pula se já existe cópia nossa com o mesmo tamanho. */
-    private fun toDownloads(ctx: Context, url: String, rel: String, nome: String, onProgress: (Int, Long) -> Unit): Boolean {
+    private fun toDownloads(ctx: Context, url: String, rel: String, nome: String, cancel: () -> Boolean, onProgress: (Int, Long) -> Unit): Boolean {
         val remote = remoteSize(url)
         if (Build.VERSION.SDK_INT >= 29) {
             val resolver = ctx.contentResolver
@@ -235,7 +236,7 @@ object Extras {
             checkSpace(Environment.getExternalStorageDirectory(), remote)
             for (tentativa in 1..3) {
                 val uri = insertPending(ctx, rel, nome) ?: run { lastError = "não consegui criar o arquivo na pasta Download"; return false }
-                val ok = try { resolver.openOutputStream(uri, "w")?.use { download(url, it, onProgress) } ?: false } catch (_: Exception) { false }
+                val ok = try { resolver.openOutputStream(uri, "w")?.use { download(url, it, cancel, onProgress) } ?: false } catch (_: Exception) { false }
                 if (finishPending(ctx, uri, ok)) return true
                 if (lastError?.contains("404") == true) return false
                 try { Thread.sleep(3000L * tentativa) } catch (_: Exception) {}
@@ -247,7 +248,7 @@ object Extras {
             if (remote > 0 && dest.exists() && dest.length() == remote) return true
             checkSpace(dir, remote)
             val tmp = File(dir, "$nome.part")
-            if (!downloadFile(url, tmp, onProgress)) return false
+            if (!downloadFile(url, tmp, cancel, onProgress)) return false
             dest.delete(); return tmp.renameTo(dest)
         }
     }
@@ -315,11 +316,12 @@ object Extras {
     }
 
     /** Baixa para um arquivo, retomando de onde parou se a conexão cair (até 6 tentativas). */
-    private fun downloadFile(url: String, dest: File, onProgress: (Int, Long) -> Unit): Boolean {
+    private fun downloadFile(url: String, dest: File, cancel: () -> Boolean = { false }, onProgress: (Int, Long) -> Unit): Boolean {
         val total = remoteSize(url)
         if (total > 0 && dest.exists() && dest.length() > total) dest.delete()
         if (total > 0 && dest.exists() && dest.length() == total) return true
         for (tentativa in 1..6) {
+            if (cancel()) return false
             val have = if (dest.exists()) dest.length() else 0L
             val c = open(url, "GET", have)
             if (c == null) {
@@ -335,6 +337,7 @@ object Extras {
                     c.inputStream.use { inp ->
                         val buf = ByteArray(64 * 1024); var readTotal = start; var lastPct = -1; var lastMark = 0L
                         while (true) {
+                            if (cancel()) return false
                             val r = inp.read(buf); if (r < 0) break
                             out.write(buf, 0, r); readTotal += r
                             if (full > 0) { val pct = ((readTotal * 100) / full).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct, readTotal) } }
@@ -358,13 +361,14 @@ object Extras {
         val c = open(url, "HEAD"); val n = c?.contentLengthLong ?: -1L; c?.disconnect(); n
     } catch (_: Exception) { -1L }
 
-    private fun download(url: String, out: OutputStream, onProgress: (Int, Long) -> Unit): Boolean {
+    private fun download(url: String, out: OutputStream, cancel: () -> Boolean = { false }, onProgress: (Int, Long) -> Unit): Boolean {
         val c = open(url, "GET") ?: return false
         try {
             val total = c.contentLengthLong
             c.inputStream.use { inp ->
                 val buf = ByteArray(64 * 1024); var readTotal = 0L; var lastPct = -1; var lastMark = 0L
                 while (true) {
+                    if (cancel()) return false
                     val r = inp.read(buf); if (r < 0) break
                     out.write(buf, 0, r); readTotal += r
                     if (total > 0) { val pct = ((readTotal * 100) / total).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct, readTotal) } }
