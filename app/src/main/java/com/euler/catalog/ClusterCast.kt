@@ -44,6 +44,53 @@ object ClusterCast {
     }
 
     /**
+     * Decodifica a resposta crua do `service call` (hexdump do Parcel).
+     * Palavra0 = código de exceção (0 = ok); se !=0, palavra1 = tamanho da msg e o resto é UTF-16LE.
+     */
+    private fun decodeReply(raw: String): String {
+        // Coleta as palavras de dados (ignora a coluna de endereço "0x...:").
+        val words = ArrayList<Long>()
+        for (line in raw.lines()) {
+            val colon = line.indexOf(':')
+            val body = if (line.trimStart().startsWith("0x") && colon >= 0) line.substring(colon + 1) else continue
+            val hex = body.substringBefore('\'') // corta a parte ASCII à direita
+            for (tok in Regex("""[0-9a-fA-F]{8}""").findAll(hex)) words.add(tok.value.toLong(16))
+        }
+        if (words.isEmpty()) return raw.replace("\n", " ").take(100)
+        val w0 = words[0].toInt()
+        if (w0 == 0) return "ok (Parcel 0)"
+        val exc = when (w0) {
+            -1 -> "Security"; -2 -> "BadParcelable"; -3 -> "IllegalArgument"; -4 -> "NullPointer"
+            -5 -> "IllegalState"; -6 -> "NetworkOnMainThread"; -7 -> "UnsupportedOperation"; -8 -> "ServiceSpecific"
+            else -> "exc($w0)"
+        }
+        // Mensagem: palavra1 = nº de chars UTF-16; chars a partir da palavra2 (2 por palavra, little-endian).
+        val msg = StringBuilder()
+        if (words.size > 1) {
+            val len = words[1].toInt().coerceIn(0, 200)
+            var idx = 2
+            var count = 0
+            while (count < len && idx < words.size) {
+                val wd = words[idx]
+                val c0 = (wd and 0xFFFF).toInt()
+                val c1 = ((wd shr 16) and 0xFFFF).toInt()
+                if (count < len && c0 in 1..0xFFFF) { msg.append(c0.toChar()); count++ }
+                if (count < len && c1 in 1..0xFFFF) { msg.append(c1.toChar()); count++ }
+                idx++
+            }
+        }
+        return "EXCEÇÃO $exc" + if (msg.isNotBlank()) ": \"${msg.toString().trim()}\"" else ""
+    }
+
+    /** Sonda um opcode isolado e devolve a resposta decodificada (pra firmwares diferentes). */
+    private fun probeCode(ctx: Context, code: Int): String {
+        val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 6000)
+        if (!r.ok && r.output.isBlank()) return "falhou no shell: ${r.reason}"
+        if (r.output.contains("does not exist", true)) return "serviço não existe"
+        return decodeReply(r.output)
+    }
+
+    /**
      * Liga a projeção do painel: manda a sequência 16 → 35 → 46 (s16 null), ~1s entre cada.
      * É o 35 que faz o com.xdja.containerservice criar o display fission_bg_xdjaVirtualSurface.
      * Retorna true se todos os comandos responderam ok.
@@ -235,13 +282,32 @@ object ClusterCast {
     /** Relatório pra confirmar, no carro, o código de abertura e o display certos. */
     fun diagnose(ctx: Context): String {
         val sb = StringBuilder()
+
+        // Firmware do carro (ajuda a casar qual variante de cluster usar).
+        sb.append("Firmware / modelo:\n")
+        val fw = AdbShell.run(ctx, "getprop ro.build.display.id; getprop ro.build.version.incremental; getprop ro.product.model; getprop | grep -iE 'dilink|byd.*version' | head -6", 8000)
+        sb.append(fw.output.lines().filter { it.isNotBlank() }.joinToString("\n") { "  $it" }.ifBlank { "  (vazio)" }).append("\n\n")
+
+        // Pacotes de cluster do fornecedor (se não existir, esse firmware não projeta no painel).
+        sb.append("Pacotes de cluster (xdja/container):\n")
+        val pk = AdbShell.run(ctx, "pm list packages 2>/dev/null | grep -iE 'xdja|container|cluster|instrument' | head -10", 8000)
+        sb.append(pk.output.ifBlank { "  (nenhum encontrado)\n" }).append("\n")
+
+        // Sondagem de opcodes: testa cada um e decodifica a resposta (ok x exceção + mensagem).
+        sb.append("Sondagem de opcodes do AutoContainer (decodificada):\n")
+        for (code in listOf(0, 16, 17, 18, 29, 35, 45, 46)) {
+            sb.append("  code $code → ").append(probeCode(ctx, code)).append("\n")
+            Thread.sleep(300)
+        }
+        sb.append("\n")
+
         sb.append("Displays antes de abrir:\n").append(displaysText(ctx)).append("\n\n")
         sb.append("Ligando a projeção (sequência 16 → 35 → 46, s16 null, ~1s entre cada):\n")
         for ((i, code) in ON_SEQUENCE.withIndex()) {
             if (i > 0) Thread.sleep(1000)
             val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 6000)
-            val resumo = r.output.replace("\n", " ").take(80).ifBlank { r.reason }
-            sb.append("  $SVC code $code → ${if (r.ok && r.output.contains("Parcel(00000000", true)) "ok" else "?"}: $resumo\n")
+            val ok = r.ok && r.output.contains("Parcel(00000000", true)
+            sb.append("  $SVC code $code → ${if (ok) "ok" else decodeReply(r.output)}\n")
         }
         Thread.sleep(1500)
         sb.append("\nDisplays (app) depois de abrir:\n").append(displaysText(ctx)).append("\n")
