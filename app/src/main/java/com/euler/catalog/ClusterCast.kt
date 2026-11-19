@@ -20,10 +20,14 @@ import android.view.Display
  */
 object ClusterCast {
 
-    // Códigos de abertura: 18 (DiLink antigo) e 16 (DiLink 5). Tentamos os dois.
-    private val SERVICES = listOf("AutoContainer", "auto_container")
-    // Código 46 é o que liga a projeção no v33 (DiLink5); 18/16 cobrem firmwares mais antigos.
-    private val OPEN_CODES = listOf(46, 18, 16)
+    // O serviço real do fornecedor é "AutoContainer" (o "auto_container" não existe no v33).
+    private const val SVC = "AutoContainer"
+    // Sequência de LIGAR a projeção no v33 (DiLink5), confirmada no app de referência:
+    //   16 (prepara) → 35 (cria a superfície fission_bg_xdjaVirtualSurface) → 46 (mostra no painel).
+    // Cada comando com ~1s de intervalo, todos com s16 null.
+    private val ON_SEQUENCE = listOf(16, 35, 46)
+    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → (1,5s) → 18 → 0.
+    private val OFF_SEQUENCE = listOf(46, 18, 0)
 
     data class Result(val ok: Boolean, val detail: String)
 
@@ -33,27 +37,33 @@ object ClusterCast {
 
     // ---------- superfície do cluster ----------
 
-    /** Abre a superfície do cluster. Retorna o método que respondeu (ou vazio se nenhum). */
-    private fun openSurface(ctx: Context): String {
-        // No v33 (DiLink5) o serviço de debug do cluster ajuda a criar a superfície de projeção.
-        AdbShell.run(ctx, "am startservice -n com.byd.clusterdebug/.ClusterDebugService 2>/dev/null", 6000)
-        for (svc in SERVICES) for (code in OPEN_CODES) {
-            // s16 null (a string "null") — é o que o app de referência usa no v33.
-            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 null 2>/dev/null", 8000)
-            if (r.ok && !r.output.contains("does not exist", true) && !r.output.contains("not found", true)
-                && !r.output.contains("Service $svc", true)) {
-                if (r.output.contains("Parcel(00000000", true) || r.output.contains("Result", true) || r.output.isBlank())
-                    return "$svc/$code"
-            }
-        }
-        // Sem serviço: tenta subir o containerservice do fornecedor.
-        AdbShell.run(ctx, "am startservice --user 0 -n com.xdja.containerservice/.AutoDisplayService 2>/dev/null", 6000)
-        return ""
+    /** Um comando service call com s16 null. true se a central respondeu Result: Parcel(00000000. */
+    private fun callCode(ctx: Context, code: Int): Boolean {
+        val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 8000)
+        return r.ok && r.output.contains("Parcel(00000000", true)
     }
 
-    /** Fecha/libera a superfície do cluster (sequência 46 → 18 → 0, como o app de referência). */
+    /**
+     * Liga a projeção do painel: manda a sequência 16 → 35 → 46 (s16 null), ~1s entre cada.
+     * É o 35 que faz o com.xdja.containerservice criar o display fission_bg_xdjaVirtualSurface.
+     * Retorna true se todos os comandos responderam ok.
+     */
+    private fun openSurface(ctx: Context): Boolean {
+        var allOk = true
+        for ((i, code) in ON_SEQUENCE.withIndex()) {
+            if (i > 0) Thread.sleep(1000)
+            if (!callCode(ctx, code)) allOk = false
+        }
+        return allOk
+    }
+
+    /** Desliga a projeção e volta o painel original da BYD (46 → 1,5s → 18 → 0). */
     private fun releaseSurface(ctx: Context) {
-        for (svc in SERVICES) AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 46 s16 null 2>/dev/null; sleep 0.3; service call $svc 2 i32 1000 i32 18 s16 null 2>/dev/null; sleep 0.3; service call $svc 2 i32 1000 i32 0 s16 null 2>/dev/null", 8000)
+        callCode(ctx, OFF_SEQUENCE[0])   // 46
+        Thread.sleep(1500)
+        callCode(ctx, OFF_SEQUENCE[1])   // 18
+        Thread.sleep(1000)
+        callCode(ctx, OFF_SEQUENCE[2])   // 0
     }
 
     // ---------- display do cluster ----------
@@ -135,12 +145,12 @@ object ClusterCast {
 
     /** Joga o app que está na tela pro cluster. Abre a superfície, acha o display e move a tarefa. */
     fun throwToCluster(ctx: Context): Result {
-        val method = openSurface(ctx)
-        // O display do cluster costuma aparecer só depois de abrir a superfície: espera um pouco.
+        val seqOk = openSurface(ctx)
+        // O display só aparece depois do 35: o app de referência procura por até ~6s (30×200ms).
         var id = -1
-        val until = System.currentTimeMillis() + 4000
-        while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(250) }
-        if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (abertura: ${method.ifEmpty { "nenhuma respondeu" }})") }
+        val until = System.currentTimeMillis() + 7000
+        while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(200) }
+        if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (sequência 16→35→46 ${if (seqOk) "respondeu ok" else "falhou em algum passo"})") }
 
         val fg = foreground(ctx) ?: return Result(false, "não identifiquei o app em primeiro plano")
         val (taskId, comp) = fg
@@ -178,12 +188,12 @@ object ClusterCast {
     fun diagnose(ctx: Context): String {
         val sb = StringBuilder()
         sb.append("Displays antes de abrir:\n").append(displaysText(ctx)).append("\n\n")
-        AdbShell.run(ctx, "am startservice -n com.byd.clusterdebug/.ClusterDebugService 2>/dev/null", 6000)
-        sb.append("Testando abertura da superfície (s16 null):\n")
-        for (svc in SERVICES) for (code in OPEN_CODES) {
-            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 null 2>&1", 6000)
+        sb.append("Ligando a projeção (sequência 16 → 35 → 46, s16 null, ~1s entre cada):\n")
+        for ((i, code) in ON_SEQUENCE.withIndex()) {
+            if (i > 0) Thread.sleep(1000)
+            val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 6000)
             val resumo = r.output.replace("\n", " ").take(80).ifBlank { r.reason }
-            sb.append("  $svc code $code → ${if (r.ok) "ok" else "falhou"}: $resumo\n")
+            sb.append("  $SVC code $code → ${if (r.ok && r.output.contains("Parcel(00000000", true)) "ok" else "?"}: $resumo\n")
         }
         Thread.sleep(1500)
         sb.append("\nDisplays (app) depois de abrir:\n").append(displaysText(ctx)).append("\n")
