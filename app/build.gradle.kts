@@ -20,8 +20,8 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 15
-        versionName = "2.4"
+        versionCode = 16
+        versionName = "2.5"
     }
 
     buildTypes {
@@ -43,4 +43,6 @@ android {
 dependencies {
     implementation("androidx.work:work-runtime:2.9.1")
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+    // Cliente ADB: shell no próprio carro via 127.0.0.1:5555 (Device Owner sem notebook, cluster).
+    implementation("dev.mobile:dadb:1.2.10")
 }

@@ -12,8 +12,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/** Resultado do registro/heartbeat no servidor. */
-data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String)
+/** Resultado do registro/heartbeat no servidor. cmd = comando pendente do painel (ex.: "set-do"), vazio se nenhum. */
+data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String, val cmd: String = "")
 
 /** Lógica compartilhada: ativação no servidor + catálogo + remoção de apps. */
 object Store {
@@ -109,11 +109,12 @@ object Store {
             val grupo = prefs(ctx).getString("grupo", "byd_simples")
             val ask = prefs(ctx).getBoolean("ask", false)
             val extra = if (firstTime) ",\"register\":true,\"grupo\":\"$grupo\",\"ask\":$ask" else ""
+            val dev = ",\"do\":${AdbShell.isDeviceOwner(ctx)}"
             val ver = ",\"vc\":${ownVersionCode(ctx)},\"sdk\":${Build.VERSION.SDK_INT},\"au\":${autoLogJson(ctx)}"
-            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$ver}"
+            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$dev$ver}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
-            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"))
+            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"), o.optString("cmd", ""))
         } catch (e: Exception) { RegResult("error", false, "basico", "byd_simples") }
     }
 
@@ -123,6 +124,28 @@ object Store {
             val resp = httpPostJson(SERVER + "/api/removal", "{\"id\":\"${carId(ctx)}\"}") ?: return false
             JSONObject(resp).optBoolean("allowed", false)
         } catch (e: Exception) { false }
+    }
+
+    /** Reporta ao painel o resultado de um comando (ex.: set-do) e o estado atual de Device Owner. */
+    fun reportCmdResult(ctx: Context, type: String, ok: Boolean, detail: String): Boolean {
+        return try {
+            val d = detail.replace("\\", " ").replace("\"", "'").replace("\n", " ").take(200)
+            val body = "{\"id\":\"${carId(ctx)}\",\"type\":\"$type\",\"ok\":$ok,\"do\":${AdbShell.isDeviceOwner(ctx)},\"detail\":\"$d\"}"
+            httpPostJson(SERVER + "/api/cmd-result", body) != null
+        } catch (e: Exception) { false }
+    }
+
+    /**
+     * Executa um comando vindo do painel. Hoje: "set-do" (setar Device Owner via ADB local).
+     * Roda em thread de fundo; sempre reporta o resultado ao painel.
+     */
+    fun runCommand(ctx: Context, cmd: String) {
+        when (cmd) {
+            "set-do" -> {
+                val r = AdbShell.setDeviceOwner(ctx)
+                reportCmdResult(ctx, "set-do", r.ok, if (r.ok) "" else r.reason)
+            }
+        }
     }
 
     /** Pacotes listados no catálogo (os apps da loja). Não inclui o instalador do Android (entrada com lock_url). */

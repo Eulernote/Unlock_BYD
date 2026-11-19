@@ -1,0 +1,37 @@
+name: build-teste
+# Compila o APK de uma branch de teste e disponibiliza como artefato para baixar.
+# NÃO publica no R2, NÃO mexe no app_version.json e NÃO toca na branch apk/main.
+# Os carros continuam na versão de produção — este APK é só para instalar manualmente num carro de teste.
+on:
+  push:
+    branches: [ shell-adb-do ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build debug APK
+        run: |
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          mv app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/Unlock_BYD-teste.apk
+
+      - name: Upload APK (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unlock_BYD-teste
+          path: app/build/outputs/apk/debug/Unlock_BYD-teste.apk
+          if-no-files-found: error

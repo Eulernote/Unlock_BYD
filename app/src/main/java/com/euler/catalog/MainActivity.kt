@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private var selfLatestVc = 0
     private var selfUrl = ""
     private var selfAutoTried = false
+    @Volatile private var cmdRunning = false
     private var currentPlan = "basico"
     private var currentGrupo = "byd_simples"
     private var selectedModel: String? = null
@@ -138,7 +139,7 @@ class MainActivity : Activity() {
         override fun run() {
             Thread {
                 val r = Store.register(this@MainActivity)
-                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, false) }
+                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, false); handleCmd(r.cmd) }
             }.start()
             poller.postDelayed(this, 30_000)
         }
@@ -192,7 +193,25 @@ class MainActivity : Activity() {
         container.addView(headerView("Verificando ativação…"))
         Thread {
             val r = Store.register(this, firstTime)
-            runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, true) }
+            runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, true); handleCmd(r.cmd) }
+        }.start()
+    }
+
+    /** Executa um comando pedido pelo painel (ex.: setar Device Owner via ADB). Opcional — nunca trava a loja. */
+    private fun handleCmd(cmd: String) {
+        if (cmd.isEmpty() || cmdRunning) return
+        cmdRunning = true
+        if (cmd == "set-do") toast("Setando Device Owner… se o carro pedir, toque em \"Sempre permitir\".")
+        Thread {
+            try {
+                Store.runCommand(applicationContext, cmd)
+                Store.register(applicationContext)   // re-registra na hora pra o painel atualizar rápido
+            } catch (e: Exception) {
+            } finally { cmdRunning = false }
+            runOnUiThread {
+                if (cmd == "set-do") toast(if (AdbShell.isDeviceOwner(this)) "Device Owner ativo ✓" else "Não consegui setar o Device Owner")
+                refreshInstalledStates()
+            }
         }.start()
     }
 
