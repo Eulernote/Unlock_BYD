@@ -31,9 +31,9 @@ object ClusterCast {
 
     data class Result(val ok: Boolean, val detail: String)
 
-    /** Última tarefa jogada no cluster, pra conseguir trazer de volta. */
-    @Volatile var lastTaskId: Int = -1
+    /** Último app jogado no cluster, pra conseguir trazer de volta. */
     @Volatile var lastPkg: String = ""
+    @Volatile var lastComp: String = ""
 
     // ---------- superfície do cluster ----------
 
@@ -141,46 +141,94 @@ object ClusterCast {
         return null
     }
 
+    // ---------- app/tarefa (fluxo BYD confirmado no ClusterCast webdelta) ----------
+
+    /** Pacote do app em primeiro plano na tela do carro (display 0). Ignora o próprio Unlock BYD. */
+    private fun foregroundPackage(ctx: Context): String? {
+        val out = AdbShell.run(ctx, "dumpsys activity activities 2>/dev/null", 8000).output
+        if (out.isBlank()) return null
+        // Recorta a seção do "Display #0" (onde fica o app da multimídia).
+        val i0 = out.indexOf("Display #0")
+        val region = if (i0 >= 0) {
+            val next = out.indexOf("Display #", i0 + 9)
+            if (next > i0) out.substring(i0, next) else out.substring(i0)
+        } else out
+        // Primeiro mResumedActivity que não seja o nosso app.
+        val rx = Regex("""mResumedActivity:.*?\{[^ ]+ u\d+ ([^/]+)/""")
+        for (m in rx.findAll(region)) {
+            val pkg = m.groupValues[1]
+            if (pkg != ctx.packageName) return pkg
+        }
+        return null
+    }
+
+    /** Resolve a activity pública/launcher do pacote: cmd package resolve-activity --brief. */
+    private fun resolveLaunchComponent(ctx: Context, pkg: String): String? {
+        val out = AdbShell.run(ctx, "cmd package resolve-activity --brief $pkg 2>/dev/null", 8000).output
+        for (line in out.lines()) {
+            val s = line.trim()
+            if (s.contains("/") && !s.contains(" ") && s.startsWith(pkg)) return s
+        }
+        return null
+    }
+
+    /** Move a stack do pacote para o display alvo (am display move-stack). Best-effort. */
+    private fun moveStackToDisplay(ctx: Context, pkg: String, display: Int): Boolean {
+        val out = AdbShell.run(ctx, "am stack list 2>/dev/null", 8000).output
+        if (out.isBlank()) return false
+        val header = Regex("""Stack id=(\d+).*?displayId=(\d+)""")
+        var stackId = -1
+        for (line in out.lines()) {
+            val m = header.find(line)
+            if (m != null) stackId = m.groupValues[1].toIntOrNull() ?: stackId
+            if (line.contains("$pkg/")) { if (stackId >= 0) break }
+        }
+        if (stackId < 0) return false
+        AdbShell.run(ctx, "am display move-stack $stackId $display 2>&1", 8000)
+        return true
+    }
+
     // ---------- ações ----------
 
-    /** Joga o app que está na tela pro cluster. Abre a superfície, acha o display e move a tarefa. */
+    /** Joga o app que está na tela pro cluster: cria a superfície, resolve o launcher e relança no display 1. */
     fun throwToCluster(ctx: Context): Result {
         val seqOk = openSurface(ctx)
-        // O display só aparece depois do 35: o app de referência procura por até ~6s (30×200ms).
+        // O display só aparece depois do 35: o app de referência procura por até ~6s.
         var id = -1
         val until = System.currentTimeMillis() + 7000
         while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(200) }
         if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (sequência 16→35→46 ${if (seqOk) "respondeu ok" else "falhou em algum passo"})") }
 
-        val fg = foreground(ctx) ?: return Result(false, "não identifiquei o app em primeiro plano")
-        val (taskId, comp) = fg
-        if (taskId > 0) {
-            val r = AdbShell.run(ctx, "am stack move-task $taskId $id true 2>/dev/null || cmd activity move-task $taskId $id true 2>/dev/null", 8000)
-            if (r.ok) { lastTaskId = taskId; lastPkg = comp.substringBefore('/'); return Result(true, "$comp → cluster #$id") }
+        val pkg = foregroundPackage(ctx) ?: run { releaseSurface(ctx); return Result(false, "nenhum app em foco na tela") }
+        val comp = resolveLaunchComponent(ctx, pkg) ?: run { releaseSurface(ctx); return Result(false, "sem activity pública em $pkg") }
+
+        // Move a stack e relança o launcher no display do cluster (o que de fato renderiza).
+        moveStackToDisplay(ctx, pkg, id)
+        val r = AdbShell.run(ctx, "am start --display $id -n $comp 2>&1", 10000)
+        if (r.output.contains("Error", true) || r.output.contains("Exception", true)) {
+            releaseSurface(ctx)
+            return Result(false, "falhei ao abrir no cluster: ${r.output.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: r.reason}")
         }
-        // Fallback: relança o app no display do cluster.
-        val r2 = AdbShell.run(ctx, "am start --user 0 --display $id --windowingMode 1 -f 0x10000000 --ez cluster true -n $comp 2>/dev/null", 8000)
-        return if (r2.ok) { lastTaskId = taskId; lastPkg = comp.substringBefore('/'); Result(true, "$comp → cluster #$id (relançado)") }
-        else Result(false, "falhei ao mover pro cluster: ${r2.reason.ifBlank { r2.output.take(120) }}")
+        lastPkg = pkg; lastComp = comp
+        return Result(true, "$pkg → cluster #$id")
     }
 
     /** Traz de volta pra tela principal o que foi jogado no cluster, e libera a superfície. */
     fun bringBack(ctx: Context): Result {
         var moved = false
-        if (lastTaskId > 0) {
-            val r = AdbShell.run(ctx, "am stack move-task $lastTaskId 0 true 2>/dev/null || cmd activity move-task $lastTaskId 0 true 2>/dev/null", 8000)
-            moved = r.ok
-        } else if (lastPkg.isNotEmpty()) {
-            val r = AdbShell.run(ctx, "am start --user 0 --display 0 -f 0x10000000 $lastPkg 2>/dev/null", 8000)
-            moved = r.ok
+        if (lastPkg.isNotEmpty()) {
+            moveStackToDisplay(ctx, lastPkg, 0)
+            val comp = lastComp.ifEmpty { resolveLaunchComponent(ctx, lastPkg) ?: lastPkg }
+            val r = AdbShell.run(ctx, "am start --display 0 -n $comp 2>&1", 10000)
+            moved = !(r.output.contains("Error", true) || r.output.contains("Exception", true))
         }
         releaseSurface(ctx)
-        lastTaskId = -1; lastPkg = ""
+        lastPkg = ""; lastComp = ""
         return Result(moved, if (moved) "voltou pra tela do carro" else "liberei o cluster")
     }
 
     /** true se há algo jogado no cluster agora (controle do ícone: jogar x voltar). */
-    fun isCasting(): Boolean = lastTaskId > 0 || lastPkg.isNotEmpty()
+    fun isCasting(): Boolean = lastPkg.isNotEmpty()
 
     // ---------- diagnóstico (primeiro teste no carro) ----------
 
@@ -221,6 +269,9 @@ object ClusterCast {
         sb.append(fgRaw.output.ifBlank { "(vazio)" }).append("\n")
         val fg = foreground(ctx)
         sb.append("App em primeiro plano (lido): ").append(fg?.second ?: "não identificado").append(fg?.let { " (task ${it.first})" } ?: "").append("\n")
+        val pkg = foregroundPackage(ctx)
+        sb.append("Pacote em foco (display 0): ").append(pkg ?: "não identificado").append("\n")
+        if (pkg != null) sb.append("Launcher resolvido: ").append(resolveLaunchComponent(ctx, pkg) ?: "(sem activity pública)").append("\n")
         releaseSurface(ctx)
         return sb.toString()
     }
