@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private var selfLatestVc = 0
     private var selfUrl = ""
     private var selfAutoTried = false
+    @Volatile private var cmdRunning = false
     private var currentPlan = "basico"
     private var currentGrupo = "byd_simples"
     private var selectedModel: String? = null
@@ -131,14 +132,20 @@ class MainActivity : Activity() {
 
         cleanTemps()
         scheduleDailyCheck()
-        if (Store.isOnboarded(this)) { checkGate(); startPolling() } else showOnboarding()
+        if (Store.isOnboarded(this)) {
+            checkGate(); startPolling()
+            // Se o app acabou de ser atualizado, o BYD apagou o auto-start: re-habilita sozinho.
+            Thread { Store.ensureAutostartAfterUpdate(applicationContext) }.start()
+            // Se o cluster estiver habilitado, liga o ícone flutuante.
+            applyClusterOverlay()
+        } else showOnboarding()
     }
 
     private val pollRunnable = object : Runnable {
         override fun run() {
             Thread {
                 val r = Store.register(this@MainActivity)
-                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, false) }
+                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, false); handleCmd(r.cmd) }
             }.start()
             poller.postDelayed(this, 30_000)
         }
@@ -192,7 +199,25 @@ class MainActivity : Activity() {
         container.addView(headerView("Verificando ativação…"))
         Thread {
             val r = Store.register(this, firstTime)
-            runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, true) }
+            runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; applyStatus(r.status, r.wipe, true); handleCmd(r.cmd) }
+        }.start()
+    }
+
+    /** Executa um comando pedido pelo painel (ex.: setar Device Owner via ADB). Opcional — nunca trava a loja. */
+    private fun handleCmd(cmd: String) {
+        if (cmd.isEmpty() || cmdRunning) return
+        cmdRunning = true
+        if (cmd == "set-do") toast("Setando Device Owner… se o carro pedir, toque em \"Sempre permitir\".")
+        Thread {
+            try {
+                Store.runCommand(applicationContext, cmd)
+                Store.register(applicationContext)   // re-registra na hora pra o painel atualizar rápido
+            } catch (e: Exception) {
+            } finally { cmdRunning = false }
+            runOnUiThread {
+                if (cmd == "set-do") toast(if (AdbShell.isDeviceOwner(this)) "Device Owner ativo ✓" else "Não consegui setar o Device Owner")
+                refreshInstalledStates()
+            }
         }.start()
     }
 
@@ -335,6 +360,13 @@ class MainActivity : Activity() {
         val alp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); alp.topMargin = dp(4); all.layoutParams = alp
         all.setOnClickListener { enqueueAll(visible) }
         container.addView(all)
+
+        // Projeção no cluster (opcional, via ADB). Abre a tela de configuração.
+        val cl = Button(this); cl.text = "⤢ Projeção no cluster"; styleBtn(cl, SURFACE2, TEXT)
+        cl.background = rounded(SURFACE2, 10, 1, BORDER); cl.setTextColor(TEXT)
+        val clp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); clp.topMargin = dp(8); cl.layoutParams = clp
+        cl.setOnClickListener { showClusterSettings() }
+        container.addView(cl)
 
         for (e in visible) container.addView(appCard(e))
 
@@ -780,5 +812,105 @@ class MainActivity : Activity() {
     }
 
     private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
+
+    // ---------- Projeção no cluster ----------
+
+    private fun canOverlay(): Boolean = Build.VERSION.SDK_INT < 23 || android.provider.Settings.canDrawOverlays(this)
+
+    /** Liga/desliga o ícone flutuante conforme as configurações e a permissão. */
+    private fun applyClusterOverlay() {
+        if (Store.clusterEnabled(this) && Store.clusterMode(this) == "icon" && canOverlay())
+            ClusterOverlayService.start(this)
+        else
+            ClusterOverlayService.stop(this)
+    }
+
+    private fun showClusterSettings() {
+        container.removeAllViews()
+        container.addView(headerView("Projeção no cluster"))
+
+        val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
+        card.background = rounded(SURFACE, 14, 1, BORDER); card.setPadding(dp(18), dp(18), dp(18), dp(18))
+        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); lp.topMargin = dp(8); card.layoutParams = lp
+
+        card.addView(tv("Enviar apps da loja para o painel de instrumentos (cluster) do veículo.", 13f, MUTED).apply { setPadding(0, 0, 0, dp(14)) })
+
+        val enabled = Store.clusterEnabled(this)
+        val toggle = Button(this)
+        toggle.text = if (enabled) "✓ Cluster habilitado" else "Habilitar cluster"
+        styleBtn(toggle, if (enabled) GREEN else ACCENT, if (enabled) 0xFF04231A.toInt() else 0xFF04201D.toInt())
+        toggle.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        toggle.setOnClickListener {
+            val now = !Store.clusterEnabled(this)
+            Store.setClusterEnabled(this, now)
+            if (now && !canOverlay()) {
+                toast("Preciso da permissão de sobreposição…")
+                Thread {
+                    val g = AdbShell.grantOverlay(applicationContext)
+                    runOnUiThread {
+                        if (!canOverlay()) startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            android.net.Uri.parse("package:$packageName")))
+                        applyClusterOverlay(); showClusterSettings()
+                    }
+                }.start()
+            } else { applyClusterOverlay(); showClusterSettings() }
+        }
+        card.addView(toggle)
+
+        if (enabled) {
+            // Permissão de sobreposição
+            if (!canOverlay()) {
+                card.addView(tv("Falta a permissão de sobrepor outras telas.", 12.5f, 0xFFF2C25B.toInt()).apply { setPadding(0, dp(14), 0, dp(6)) })
+                val perm = Button(this); perm.text = "Permitir sobreposição"; styleBtn(perm, SURFACE2, TEXT); perm.background = rounded(SURFACE2, 9, 1, BORDER)
+                perm.setOnClickListener {
+                    Thread { AdbShell.grantOverlay(applicationContext); runOnUiThread {
+                        if (!canOverlay()) startActivity(Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName")))
+                        applyClusterOverlay(); showClusterSettings() } }.start()
+                }
+                card.addView(perm)
+            }
+
+            // Modo de acionamento
+            card.addView(tv("Como acionar", 12f, MUTED, true).apply { setPadding(0, dp(18), 0, dp(8)) })
+            val mode = Store.clusterMode(this)
+            val icon = Button(this); icon.text = if (mode == "icon") "● Ícone flutuante" else "Ícone flutuante"
+            styleBtn(icon, if (mode == "icon") SURFACE2 else SURFACE, if (mode == "icon") ACCENT else MUTED)
+            icon.background = rounded(if (mode == "icon") SURFACE2 else SURFACE, 9, 1, if (mode == "icon") ACCENT else BORDER)
+            icon.layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            icon.setOnClickListener { Store.setClusterMode(this, "icon"); applyClusterOverlay(); showClusterSettings() }
+            card.addView(icon)
+
+            val gest = Button(this); gest.text = "Gesto (dois dedos) · em breve"; styleBtn(gest, SURFACE, MUTED)
+            gest.background = rounded(SURFACE, 9, 1, BORDER); gest.isEnabled = false; gest.alpha = 0.5f
+            val glp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); glp.topMargin = dp(8); gest.layoutParams = glp
+            card.addView(gest)
+
+            if (Store.clusterMode(this) == "icon" && canOverlay())
+                card.addView(tv("O ícone ⤢ fica na tela. Toque para enviar o app atual ao cluster; toque de novo para trazer de volta.", 12f, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+
+            // Diagnóstico
+            val diag = Button(this); diag.text = "Diagnóstico do cluster"; styleBtn(diag, SURFACE2, TEXT); diag.background = rounded(SURFACE2, 9, 1, BORDER)
+            val dlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); dlp.topMargin = dp(18); diag.layoutParams = dlp
+            diag.setOnClickListener {
+                toast("Rodando diagnóstico…")
+                Thread { val txt = ClusterCast.diagnose(applicationContext); runOnUiThread { showDiagnostic(txt) } }.start()
+            }
+            card.addView(diag)
+        }
+
+        container.addView(card)
+        val back = Button(this); back.text = "Voltar"; styleBtn(back, SURFACE2, MUTED); back.background = rounded(SURFACE2, 9, 1, BORDER)
+        val blp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); blp.topMargin = dp(16); back.layoutParams = blp
+        back.setOnClickListener { showCatalog() }
+        container.addView(back)
+    }
+
+    private fun showDiagnostic(text: String) {
+        val tvv = TextView(this); tvv.text = text; tvv.setTextColor(TEXT); tvv.textSize = 12f
+        tvv.setTypeface(Typeface.MONOSPACE); tvv.setPadding(dp(16), dp(16), dp(16), dp(16)); tvv.setTextIsSelectable(true)
+        val sv = ScrollView(this); sv.addView(tvv)
+        android.app.AlertDialog.Builder(this).setTitle("Diagnóstico do cluster").setView(sv)
+            .setPositiveButton("Fechar", null).show()
+    }
     override fun onDestroy() { super.onDestroy(); stopPolling(); try { unregisterReceiver(statusReceiver) } catch (e: Exception) {}; try { unregisterReceiver(uninstallReceiver) } catch (e: Exception) {} }
 }

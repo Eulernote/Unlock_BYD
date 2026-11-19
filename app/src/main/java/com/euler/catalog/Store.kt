@@ -12,8 +12,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/** Resultado do registro/heartbeat no servidor. */
-data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String)
+/** Resultado do registro/heartbeat no servidor.
+ *  cmd = comando pendente do painel (ex.: "set-do"); testVc/testUrl = versão de teste direcionada a este carro. */
+data class RegResult(val status: String, val wipe: Boolean, val plan: String, val grupo: String,
+                     val cmd: String = "", val testVc: Int = 0, val testUrl: String = "")
 
 /** Lógica compartilhada: ativação no servidor + catálogo + remoção de apps. */
 object Store {
@@ -63,6 +65,13 @@ object Store {
     }
     fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").remove("grupo").remove("ask").apply() }
 
+    // ---- projeção no cluster ----
+    fun clusterEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean("clusterEnabled", false)
+    fun setClusterEnabled(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("clusterEnabled", v).apply() }
+    /** Modo de acionamento: "icon" (ícone flutuante) ou "gesture" (gesto — em breve). */
+    fun clusterMode(ctx: Context): String = prefs(ctx).getString("clusterMode", "icon") ?: "icon"
+    fun setClusterMode(ctx: Context, m: String) { prefs(ctx).edit().putString("clusterMode", m).apply() }
+
     /** App do catálogo (para auto-atualização): pacote, url e número de build. */
     data class CatApp(val pkg: String, val url: String, val build: Int)
     fun catalogApps(): List<CatApp> {
@@ -109,11 +118,13 @@ object Store {
             val grupo = prefs(ctx).getString("grupo", "byd_simples")
             val ask = prefs(ctx).getBoolean("ask", false)
             val extra = if (firstTime) ",\"register\":true,\"grupo\":\"$grupo\",\"ask\":$ask" else ""
+            val dev = ",\"do\":${AdbShell.isDeviceOwner(ctx)}"
             val ver = ",\"vc\":${ownVersionCode(ctx)},\"sdk\":${Build.VERSION.SDK_INT},\"au\":${autoLogJson(ctx)}"
-            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$ver}"
+            val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$dev$ver}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
-            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"))
+            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"),
+                o.optString("cmd", ""), o.optInt("tvc", 0), o.optString("turl", ""))
         } catch (e: Exception) { RegResult("error", false, "basico", "byd_simples") }
     }
 
@@ -123,6 +134,44 @@ object Store {
             val resp = httpPostJson(SERVER + "/api/removal", "{\"id\":\"${carId(ctx)}\"}") ?: return false
             JSONObject(resp).optBoolean("allowed", false)
         } catch (e: Exception) { false }
+    }
+
+    /** Reporta ao painel o resultado de um comando (ex.: set-do) e o estado atual de Device Owner. */
+    fun reportCmdResult(ctx: Context, type: String, ok: Boolean, detail: String): Boolean {
+        return try {
+            val d = detail.replace("\\", " ").replace("\"", "'").replace("\n", " ").take(200)
+            val body = "{\"id\":\"${carId(ctx)}\",\"type\":\"$type\",\"ok\":$ok,\"do\":${AdbShell.isDeviceOwner(ctx)},\"detail\":\"$d\"}"
+            httpPostJson(SERVER + "/api/cmd-result", body) != null
+        } catch (e: Exception) { false }
+    }
+
+    /**
+     * O BYD zera a whitelist de inicialização automática a cada instalação, então, depois que o app
+     * se atualiza, ele some do auto-start. Isto re-habilita sozinho (silencioso, via ADB) uma vez por
+     * versão nova. Em carro sem depuração (ex.: Sealion) desiste após algumas tentativas, sem travar.
+     */
+    fun ensureAutostartAfterUpdate(ctx: Context) {
+        try {
+            val vc = ownVersionCode(ctx)
+            if (prefs(ctx).getInt("autostartVc", -1) == vc) return      // já re-habilitado nesta versão
+            val tries = prefs(ctx).getInt("autostartTries_$vc", 0)
+            if (tries >= 4) return                                       // desiste nesta versão
+            prefs(ctx).edit().putInt("autostartTries_$vc", tries + 1).apply()
+            if (AdbShell.enableAutostart(ctx).ok) prefs(ctx).edit().putInt("autostartVc", vc).apply()
+        } catch (e: Exception) {}
+    }
+
+    /**
+     * Executa um comando vindo do painel. Hoje: "set-do" (setar Device Owner via ADB local).
+     * Roda em thread de fundo; sempre reporta o resultado ao painel.
+     */
+    fun runCommand(ctx: Context, cmd: String) {
+        when (cmd) {
+            "set-do" -> {
+                val r = AdbShell.setDeviceOwner(ctx)
+                reportCmdResult(ctx, "set-do", r.ok, if (r.ok) "" else r.reason)
+            }
+        }
     }
 
     /** Pacotes listados no catálogo (os apps da loja). Não inclui o instalador do Android (entrada com lock_url). */

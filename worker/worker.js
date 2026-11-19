@@ -13,6 +13,7 @@ const PLANS = ['basico', 'intermediario', 'premium'];
 const GROUPS = ['byd_simples', 'byd_google', 'chery', 'geely'];
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12h
 const SEEN_MIN_MS = 1000 * 60 * 4;        // só regrava o "visto" se passou 4 min (poupa gravações no KV)
+const CMD_TTL_MS  = 1000 * 60 * 10;       // comando pendente (ex.: setar Device Owner) expira em 10 min
 function planLabel(p){ return p==='premium' ? 'Premium' : p==='intermediario' ? 'Intermediário' : 'Básico'; }
 function grupoLabel(g){ return g==='byd_google' ? 'BYD · Google' : g==='chery' ? 'Chery' : g==='geely' ? 'Geely' : 'BYD · Simples'; }
 
@@ -72,6 +73,36 @@ async function touchVer(env, id, vc, sdk, au){
   if(!cur || cur.vc !== vc || cur.sdk !== sdk || JSON.stringify(cur.au || null) !== auS)
     await env.KV.put('ver:'+id, JSON.stringify({vc:vc, sdk:sdk, au: au || null, at:Date.now()}));
 }
+// Estado de Device Owner de cada carro (reportado pelo carro a cada ping). {owner:bool, at, detail}
+async function getDo(env, id){ return await env.KV.get('do:'+id, {type:'json'}); }
+async function putDo(env, id, owner, detail){
+  await env.KV.put('do:'+id, JSON.stringify({owner: !!owner, at: Date.now(), detail: detail || ''}));
+}
+// Comando pendente do painel para o carro (ex.: {type:'set-do', by, at}). Entregue no ping e consumido pelo carro.
+async function getCmd(env, id){
+  const c = await env.KV.get('cmd:'+id, {type:'json'});
+  if(!c) return null;
+  if(Date.now() - (c.at || 0) > CMD_TTL_MS){ await env.KV.delete('cmd:'+id); return null; }
+  return c;
+}
+async function putCmd(env, id, type, by){ await env.KV.put('cmd:'+id, JSON.stringify({type:type, by:by, at:Date.now()}), {expirationTtl: 1800}); }
+async function delCmd(env, id){ await env.KV.delete('cmd:'+id); }
+
+// Canal de teste: carro marcado recebe a versão de teste (app_version_test.json), sem afetar os demais.
+async function getTestFlag(env, id){ return (await env.KV.get('test:'+id)) === '1'; }
+async function setTestFlag(env, id, on){ if(on) await env.KV.put('test:'+id, '1'); else await env.KV.delete('test:'+id); }
+async function testBuild(env){
+  try{
+    if(!env.FILES) return null;
+    const o = await env.FILES.get('app_version_test.json');
+    if(!o) return null;
+    const j = JSON.parse(await o.text());
+    const vc = parseInt(j.versionCode) || 0;
+    if(!vc || !j.url) return null;
+    return {vc: vc, url: String(j.url)};
+  }catch(e){ return null; }
+}
+
 // Última versão publicada do app (lida do app_version.json no R2).
 async function latestVc(env){
   try{
@@ -103,7 +134,7 @@ function objHeaders(obj, key){
   h.set('Content-Type', (obj.httpMetadata && obj.httpMetadata.contentType) || mimeFor(key));
   h.set('Accept-Ranges', 'bytes');
   if(obj.httpEtag) h.set('ETag', obj.httpEtag);
-  const live = key === 'catalog.json' || key === 'app_version.json';
+  const live = key === 'catalog.json' || key === 'app_version.json' || key === 'app_version_test.json';
   h.set('Cache-Control', live ? 'no-cache' : 'public, max-age=300');
   return h;
 }
@@ -204,7 +235,18 @@ async function handle(request, env){
       // Carro já cadastrado: grava SÓ o "visto por último" e a versão, nunca reescreve car:<id>.
       await touchSeen(env, id, now);
       await touchVer(env, id, vc, sdk, au);
-      return json({status:c.status, wipe: c.status==='revoked' ? !!c.wipe : false, plan: c.plan||'basico', grupo: c.grupo||'byd_simples'});
+      // Estado de Device Owner reportado pelo carro (v16+). Só grava quando o carro informa.
+      if(typeof b.do === 'boolean') await putDo(env, id, b.do, '');
+      // Comando pendente do painel (ex.: setar Device Owner), entregue uma vez.
+      const cmd = await getCmd(env, id);
+      const out = {status:c.status, wipe: c.status==='revoked' ? !!c.wipe : false, plan: c.plan||'basico', grupo: c.grupo||'byd_simples'};
+      if(cmd) out.cmd = cmd.type;
+      // Canal de teste: só este carro recebe a versão de teste.
+      if(await getTestFlag(env, id)){
+        const tb = await testBuild(env);
+        if(tb){ out.tvc = tb.vc; out.turl = tb.url; }
+      }
+      return json(out);
     }
 
     // --- pedido de remoção de Device Owner pelo carro (sem login) ---
@@ -223,6 +265,25 @@ async function handle(request, env){
       return json({allowed:false});
     }
 
+    // --- resultado de um comando, reportado pelo carro (sem login) ---
+    if(p === '/api/cmd-result' && request.method === 'POST'){
+      const b = await request.json().catch(()=>({}));
+      const id = String(b.id||'').trim();
+      const c = await getCar(env, id);
+      if(!c) return json({ok:false});
+      const type = String(b.type||'');
+      const ok = b.ok === true;
+      const detail = String(b.detail||'').slice(0, 200);
+      if(typeof b.do === 'boolean') await putDo(env, id, b.do, detail);
+      await delCmd(env, id);
+      if(type === 'set-do'){
+        c.log.push({acao: ok ? 'Device Owner definido' : ('Falha ao setar Device Owner' + (detail?(': '+detail):'')),
+                    by: 'carro', when: fmt(Date.now()), cls: ok ? 'a-act' : 'a-rev'});
+        await putCar(env, c);
+      }
+      return json({ok:true});
+    }
+
     // --- endpoints do painel (exigem login) ---
     const user = await authUser(env, request);
 
@@ -235,15 +296,21 @@ async function handle(request, env){
         if(c){
           const sv = await getSeen(env, c.id);
           const ver = await getVer(env, c.id);
+          const doSt = await getDo(env, c.id);
+          const cmd = await getCmd(env, c.id);
+          const testOn = await getTestFlag(env, c.id);
           cars.push({
             id:c.id, nome:c.nome, status:c.status, owner:c.owner, plan: c.plan||'basico', grupo: c.grupo||'byd_simples', ask: !!c.ask, wipe:!!c.wipe,
             reg: fmt(c.reg), seen: fmt(sv || c.seen || c.reg), log: c.log||[], allowRemove: !!c.allowRemove,
             vc: ver ? ver.vc : 0, sdk: ver ? ver.sdk : 0,
-            au: ver && Array.isArray(ver.au) ? ver.au.map(x => ({p:x.p, when: fmt(x.t)})) : null
+            au: ver && Array.isArray(ver.au) ? ver.au.map(x => ({p:x.p, when: fmt(x.t)})) : null,
+            deviceOwner: doSt ? !!doSt.owner : null, doWhen: doSt ? fmt(doSt.at) : null, doDetail: doSt ? (doSt.detail||'') : '',
+            cmdPending: cmd ? cmd.type : null, test: testOn
           });
         }
       }
-      return json({cars: cars, me: cap(user), latest: await latestVc(env), files: FILE_ADMINS.indexOf(user) >= 0});
+      const tb = await testBuild(env);
+      return json({cars: cars, me: cap(user), latest: await latestVc(env), testLatest: tb ? tb.vc : 0, files: FILE_ADMINS.indexOf(user) >= 0});
     }
 
     if(p === '/api/approve' && request.method === 'POST'){
@@ -285,6 +352,29 @@ async function handle(request, env){
       const wipe = !!b.wipe; const who = cap(user);
       c.status = 'revoked'; c.wipe = wipe;
       c.log.push({acao: wipe?'Revogado (apps apagados)':'Revogado', by:who, when:fmt(Date.now()), cls:'a-rev'});
+      await putCar(env, c);
+      return json({ok:true});
+    }
+
+    if(p === '/api/set-test' && request.method === 'POST'){
+      if(!user) return json({error:'unauth'}, 401);
+      const b = await request.json().catch(()=>({}));
+      const c = await getCar(env, String(b.id||''));
+      if(!c) return json({error:'not found'}, 404);
+      const on = b.on === true;
+      await setTestFlag(env, c.id, on);
+      c.log.push({acao: on ? 'Canal de teste ativado' : 'Canal de teste desativado', by:cap(user), when:fmt(Date.now()), cls:'a-react'});
+      await putCar(env, c);
+      return json({ok:true});
+    }
+
+    if(p === '/api/set-do' && request.method === 'POST'){
+      if(!user) return json({error:'unauth'}, 401);
+      const b = await request.json().catch(()=>({}));
+      const c = await getCar(env, String(b.id||''));
+      if(!c) return json({error:'not found'}, 404);
+      await putCmd(env, c.id, 'set-do', cap(user));
+      c.log.push({acao:'Device Owner solicitado', by:cap(user), when:fmt(Date.now()), cls:'a-react'});
       await putCar(env, c);
       return json({ok:true});
     }
@@ -558,7 +648,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div id="cat-msg" style="font-size:12.5px;color:var(--muted);margin-top:10px"></div><div class="bar" id="cat-bar"><div></div></div></div></div>
 <div id="toast"></div>
 <script>
-var TOKEN=null,currentUser=null,cars=[],filter="all",revokeTarget=null,latest=0,canFiles=false,files=[],uploading=false;
+var TOKEN=null,currentUser=null,cars=[],filter="all",revokeTarget=null,latest=0,testLatest=0,canFiles=false,files=[],uploading=false;
 try{TOKEN=localStorage.getItem('ubyd_token');currentUser=localStorage.getItem('ubyd_user');}catch(e){}
 function grabToken(r){var t=r.headers.get('X-Token');if(t){TOKEN=t;try{localStorage.setItem('ubyd_token',t);}catch(e){}}}
 function api(path,opts){opts=opts||{};opts.headers=opts.headers||{};if(TOKEN)opts.headers['Authorization']='Bearer '+TOKEN;
@@ -604,7 +694,7 @@ function render(){var q=(document.getElementById('q').value||"").toLowerCase();
  var old=cars.filter(isOld).length;document.getElementById('s-old').textContent=latest?old:'—';
  document.getElementById('s-old-l').textContent=latest?('Abaixo da v'+latest):'Desatualizados';
  document.getElementById('s-old-box').className='stat old'+(latest&&!old?' ok':'');}
-function loadCars(){api('/api/cars').then(function(res){cars=res.cars||[];latest=res.latest||0;canFiles=!!res.files;document.getElementById('files-btn').style.display=canFiles?'':'none';document.getElementById('cat-btn').style.display=canFiles?'':'none';if(res.me){currentUser=res.me;setWho();}render();}).catch(function(){});}
+function loadCars(){api('/api/cars').then(function(res){cars=res.cars||[];latest=res.latest||0;testLatest=res.testLatest||0;canFiles=!!res.files;document.getElementById('files-btn').style.display=canFiles?'':'none';document.getElementById('cat-btn').style.display=canFiles?'':'none';if(res.me){currentUser=res.me;setWho();}render();}).catch(function(){});}
 function approve(id){api('/api/approve',{method:'POST',body:{id:id}}).then(function(){toast("✓ Ativado");loadCars();}).catch(function(){});}
 function openRevoke(id){revokeTarget=id;var c=cars.filter(function(x){return x.id===id;})[0];
  document.getElementById('modal-sub').textContent='Veículo: '+c.nome+'  ('+c.id+')';
@@ -628,6 +718,14 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  else h+='<button class="btn btn-reapprove" style="width:100%" onclick="activate(\\''+c.id+'\\')">Reativar com este plano</button>';
  if(c.allowRemove) h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px;margin-top:10px">Remoção de Device Owner autorizada — aguardando o carro aplicar.</div>';
  else h+='<button class="btn" style="width:100%;margin-top:10px;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="allowRemoval(\\''+c.id+'\\')">Autorizar remoção de Device Owner</button>';
+ h+='<div class="sec-title" style="margin:20px 0 6px">Device Owner <span style="color:var(--faint);font-weight:400">· via ADB</span></div>';
+ h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.deviceOwner===true?('<span style="color:#27c08a;font-weight:650">● Ativo</span>'+(c.doWhen?' <span style="color:var(--faint)">· '+c.doWhen+'</span>':'')):(c.deviceOwner===false?'<span style="color:#f2c25b">○ Sem Device Owner</span>':'<span style="color:var(--faint)">estado ainda não reportado pelo carro</span>'))+(c.doDetail?'<div style="color:var(--faint);font-size:11.5px;margin-top:3px">'+esc(c.doDetail)+'</div>':'')+'</div>';
+ if(c.cmdPending==='set-do') h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px">Comando enviado — aguardando o carro aplicar. Abra o Unlock BYD no carro; se pedir, toque em "Sempre permitir".</div>';
+ else if(c.deviceOwner!==true) h+='<button class="btn btn-approve" style="width:100%" onclick="setDo(\\''+c.id+'\\')">Setar Device Owner</button>';
+ h+='<div class="sec-title" style="margin:20px 0 6px">Canal de teste</div>';
+ h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.test?('<span style="color:#f5a623;font-weight:650">● Recebe a versão de teste</span>'+(testLatest?(' <span style="color:var(--faint)">(v'+testLatest+(c.vc?(c.vc>=testLatest?' — já atualizado':' — carro na v'+c.vc):'')+')</span>'):'')):'<span style="color:var(--faint)">usa a versão normal</span>')+'</div>';
+ if(c.test) h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="setTest(\\''+c.id+'\\',false)">Tirar do canal de teste</button>';
+ else h+='<button class="btn" style="width:100%;background:var(--surface2);color:#f5a623;border:1px solid #5a470f" onclick="setTest(\\''+c.id+'\\',true)">Atualizar este carro para a versão de teste</button>';
  h+='<button class="btn" style="width:100%;margin-top:18px;background:transparent;border:1px solid var(--red);color:var(--red)" onclick="askDelete(\\''+c.id+'\\')">Excluir veículo</button>';
  if(c.au&&c.au.length){h+='<div class="sec-title" style="margin:16px 0 4px">Atualizações automáticas recentes</div>'+c.au.map(function(x){return '<div class="logrow"><span class="logby">'+esc(x.p)+'</span><span class="logwhen">'+x.when+'</span></div>';}).join('');}
  else if(c.vc>=14){h+='<div style="font-size:11.5px;color:var(--faint);margin-top:14px">Nenhuma atualização automática de apps registrada.</div>';}
@@ -636,8 +734,24 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}
  else{dl.innerHTML=log.map(function(e){var col=userColor(e.by);return '<div class="logrow"><span class="logact '+e.cls+'">'+e.acao+'</span><span class="logby">por <span style="color:'+col+';font-weight:650">'+e.by+'</span></span><span class="logwhen">'+e.when+'</span></div>';}).join('');}
  document.getElementById('detail').style.display='flex';planPreview();}
-function closeDetail(){document.getElementById('detail').style.display='none';}
+function closeDetail(){document.getElementById('detail').style.display='none';if(doWatch){clearInterval(doWatch);doWatch=null;}}
 function allowRemoval(id){api('/api/allow-removal',{method:'POST',body:{id:id}}).then(function(){toast('Remoção de Device Owner autorizada');loadCars();closeDetail();}).catch(function(){});}
+function setTest(id,on){api('/api/set-test',{method:'POST',body:{id:id,on:on}}).then(function(){toast(on?'Canal de teste ativado — o carro atualiza no próximo ping':'Canal de teste desativado');loadCars();var d=document.getElementById('detail');if(d&&d.style.display==='flex')setTimeout(function(){openDetail(id);},500);}).catch(function(){toast('Falha ao alterar o canal');});}
+var doWatch=null,doTicks=0;
+function setDo(id){api('/api/set-do',{method:'POST',body:{id:id}}).then(function(){toast('Comando enviado — aguardando o carro');watchDo(id);}).catch(function(){toast('Falha ao enviar o comando');});}
+/* Acompanha em tempo real até o carro aplicar (ou o comando expirar). O carro pega no próximo ping (até ~30s). */
+function watchDo(id){ if(doWatch){clearInterval(doWatch);} doTicks=0;
+ var tick=function(){ doTicks++;
+  api('/api/cars').then(function(res){ cars=res.cars||[]; latest=res.latest||0; testLatest=res.testLatest||0; render();
+   var c=cars.filter(function(x){return x.id===id;})[0];
+   if(document.getElementById('detail').style.display==='flex') openDetail(id);
+   var done = !c || c.deviceOwner===true || (c.cmdPending!=='set-do' && doTicks>2);
+   if(done || doTicks>45){ clearInterval(doWatch); doWatch=null;
+     if(c&&c.deviceOwner===true) toast('Device Owner ativo ✓');
+     else if(c&&c.cmdPending!=='set-do'&&doTicks>2) toast('O carro não conseguiu setar o Device Owner'); }
+  }).catch(function(){}); };
+ tick(); doWatch=setInterval(tick,4000);
+}
 var chosenPlan='basico'; var chosenGrupo='byd_simples';
 function planPicker(sel){var o=[['basico','Básico'],['intermediario','Intermediário'],['premium','Premium']];
  var h='<div class="sec-title" style="margin:2px 0 8px">Plano da loja</div><div id="planpick" style="display:flex;gap:8px;margin-bottom:14px">';

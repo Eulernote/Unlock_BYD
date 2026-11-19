@@ -3,6 +3,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Projeção no cluster: ícone flutuante sobre a tela + serviço em primeiro plano. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
     <!-- Android 10 ou anterior: gravar OBB/data direto em Android/obb e Android/data (e Download no 9-). No 11+ não é usada. -->
@@ -36,6 +40,16 @@
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
             </intent-filter>
         </receiver>
+        <!-- Ícone flutuante da projeção no cluster. -->
+        <service
+            android:name=".ClusterOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Ícone flutuante para enviar apps ao cluster do veículo" />
+        </service>
+
         <!-- Carro ligou / app atualizado: checa na hora (ativação, atualização do Unlock BYD e dos apps). -->
         <receiver
             android:name=".BootReceiver"

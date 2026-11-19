@@ -49,6 +49,12 @@ object Updater {
             silentInstall(ctx, sv.second, ctx.packageName)
     }
 
+    /** Canal de teste: atualiza este carro para a versão de teste direcionada a ele pelo painel. */
+    fun testUpdateIfNeeded(ctx: Context, testVc: Int, testUrl: String) {
+        if (testVc > 0 && testUrl.isNotEmpty() && testVc.toLong() > installedVc(ctx, ctx.packageName))
+            silentInstall(ctx, testUrl, ctx.packageName)
+    }
+
     /** Atualiza os outros apps instalados cujo build no catálogo é maior que o já instalado. */
     fun updateInstalledApps(ctx: Context) {
         for (a in Store.catalogApps()) {
