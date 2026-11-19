@@ -1,5 +1,4 @@
 name: diag-jogos
-# Diagnóstico (somente leitura): procura o que o GTA muda no sistema que quebra o FIFA.
 on:
   push:
     branches: [ diag ]
@@ -15,7 +14,8 @@ jobs:
       - name: Ferramentas
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q jq unzip
-          pip install -q --break-system-packages androguard 2>/dev/null || pip install -q androguard
+          python3 -m pip install --break-system-packages --root-user-action=ignore androguard
+          python3 -c "import androguard; print('androguard OK')"
 
       - name: Analisar
         run: |
@@ -32,33 +32,27 @@ jobs:
           except Exception:
               from androguard.core.bytecodes.apk import APK
           a=APK(sys.argv[1]); ns='{http://schemas.android.com/apk/res/android}'
-          print("package:", a.get_package())
-          print("sharedUserId:", a.get_android_manifest_xml().get(ns+'sharedUserId'))
-          print("PERMISSOES:")
-          for p in sorted(a.get_permissions()): print("   ", p)
-          print("ACTIVITIES (primeiras):")
-          for x in a.get_activities()[:8]: print("   ", x)
+          print("package:", a.get_package(), "| sharedUserId:", a.get_android_manifest_xml().get(ns+'sharedUserId'))
+          crit=[p for p in a.get_permissions() if any(k in p for k in ("SETTINGS","SECURE","STORAGE","INSTALL","WRITE","SYSTEM_ALERT","PACKAGE","CHANGE_CONFIG","ACCESSIBILITY"))]
+          print("PERMISSOES CRITICAS:")
+          for p in sorted(crit): print("   ", p)
           PY
 
-          echo "############## FIFA 26 ##############"; echo "URL: $FIFA"
-          curl -sL "$FIFA" -o fifa.apk; echo "tamanho: $(du -h fifa.apk|cut -f1)"
-          python3 -I man.py fifa.apk
-          mkdir -p xf && (cd xf && unzip -o -q ../fifa.apk 'classes*.dex' 2>/dev/null)
-          echo "--- FIFA: como escolhe qualidade (strings) ---"
-          grep -rhoaE "(quality|Quality|QUALITY|LOW|MEDIUM|HIGH|texture|Texture|lowend|low_end|deviceTier|GpuTier|render|graphics)[A-Za-z0-9_.]{0,30}" xf 2>/dev/null | sort | uniq -c | sort -rn | head -40
-          echo "--- FIFA: arquivos/settings que ele LÊ ---"
-          grep -rhoaE "(Settings\\\$(Global|System|Secure)|settings (get|put) [a-z]+ [A-Za-z0-9_.]+|getString\\([^)]{0,40}|\\.cfg|\\.ini|config[A-Za-z0-9_.]{0,20})" xf 2>/dev/null | sort -u | head -40
-          rm -rf xf fifa.apk
+          dl(){ curl -fL --retry 6 --retry-all-errors --connect-timeout 20 -o "$2" "$1"; echo "tamanho: $(du -h "$2"|cut -f1)"; unzip -l "$2" >/dev/null 2>&1 && echo "zip OK" || echo "ZIP CORROMPIDO/TRUNCADO"; }
 
-          echo; echo "############## GTA (repack Flutter @alx) ##############"; echo "URL: $GTA"
-          curl -sL "$GTA" -o gta.apk; echo "tamanho: $(du -h gta.apk|cut -f1)"
+          echo "############## FIFA 26 ##############"
+          dl "$FIFA" fifa.apk
+          python3 -I man.py fifa.apk
+          rm -f fifa.apk
+
+          echo; echo "############## GTA (repack Flutter @alx) ##############"
+          dl "$GTA" gta.apk
           python3 -I man.py gta.apk
-          mkdir -p xg && (cd xg && unzip -o -q ../gta.apk 'classes*.dex' 'lib/*/libapp.so' 'lib/*/libflutter.so' 'assets/*' 2>/dev/null)
-          echo "--- GTA: mexe em settings GLOBAIS / driver gráfico? (a pista nº1) ---"
-          grep -rhoaE "angle_gl_driver[a-z_]*|angle_debug_package|game_driver[a-z_]*|updatable_driver[a-z_]*|gpu[a-z_]*|Settings\\\$Global|settings put (global|system|secure) [A-Za-z0-9_.]+|WRITE_SECURE_SETTINGS|debug\.hwui[a-z.]*|setprop|persist\.[a-z0-9.]+|ro\.[a-z0-9.]+" xg 2>/dev/null | sort | uniq -c | sort -rn | head -50
-          echo "--- GTA: cita o FIFA ou mexe na pasta de outro app? ---"
-          grep -rhoaE "com\.ea\.gp\.fifaworld|fifa|Android/data/com\.[A-Za-z0-9_.]+|Android/obb/com\.[A-Za-z0-9_.]+|pm install[A-Za-z -]*|/data/local/tmp" xg 2>/dev/null | sort -u | head -30
-          echo "--- GTA: pede acesso total a arquivos? ---"
-          grep -rhoaE "MANAGE_EXTERNAL_STORAGE|android\.settings\.[A-Z_]+|All.?files.?access" xg 2>/dev/null | sort -u | head
+          echo "--- GTA: engine/libs ---"; unzip -l gta.apk 2>/dev/null | grep -oE "lib/[^/]+/[^ ]+\.so" | sed 's#lib/[^/]*/##' | sort -u
+          mkdir -p xg && (cd xg && unzip -o -q ../gta.apk 'classes*.dex' 'lib/*/libapp.so' 'assets/flutter_assets/*' 2>/dev/null)
+          echo "--- GTA: settings globais / driver gráfico / secure (pista nº1) ---"
+          grep -rhoaE "angle_gl_driver[a-z_]*|game_driver[a-z_]*|updatable_driver[a-z_]*|Settings\\\$Global|settings put (global|system|secure) [A-Za-z0-9_.]+|WRITE_SECURE_SETTINGS|debug\.hwui[a-z.]*|persist\.sys\.[a-z0-9._]+|setprop [a-z]" xg 2>/dev/null | sort | uniq -c | sort -rn | head -40
+          echo "--- GTA: cita FIFA / mexe em pasta de outro app / instala pacote? ---"
+          grep -rhoaE "com\.ea\.gp\.fifaworld|Android/(data|obb)/com\.[A-Za-z0-9_.]+|pm install[A-Za-z -]*|/data/local/tmp|MANAGE_EXTERNAL_STORAGE" xg 2>/dev/null | sort -u | head -30
           rm -rf xg gta.apk
           echo; echo "===== FIM ====="
