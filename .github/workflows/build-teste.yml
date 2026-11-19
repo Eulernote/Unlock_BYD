@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -43,6 +43,19 @@ jobs:
           name: Unlock_BYD-teste
           path: app/build/outputs/apk/debug/Unlock_BYD-teste.apk
           if-no-files-found: error
+
+      - name: Publish APK to 'apk-teste' branch (git-reachable)
+        run: |
+          mkdir -p /tmp/out
+          cp app/build/outputs/apk/debug/Unlock_BYD-teste.apk /tmp/out/Unlock_BYD-teste.apk
+          cd /tmp/out
+          git init -q
+          git checkout -q -b apk-teste
+          git config user.name "ci"
+          git config user.email "ci@example.com"
+          git add Unlock_BYD-teste.apk
+          git commit -q -m "APK teste build ${{ github.sha }}"
+          git push -q --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" apk-teste
 
       - name: Publicar no R2 (canal de teste)
         if: ${{ env.CLOUDFLARE_API_TOKEN != '' }}
