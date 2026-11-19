@@ -3,46 +3,17 @@ on:
   push:
     branches: [ diag ]
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   diag:
     runs-on: ubuntu-latest
     steps:
-      - name: Ferramentas
+      - name: Checar canal de teste
         run: |
-          sudo apt-get update -q && sudo apt-get install -y -q jq unzip
-          python3 -m venv /tmp/venv
-          /tmp/venv/bin/pip install -q androguard
-          /tmp/venv/bin/python -c "import androguard; print('androguard OK')"
-
-      - name: Analisar
-        run: |
-          set +e
           B=https://euler-catalog.eulerfilhogontijodamata.workers.dev
-          curl -s "$B/catalog.json" -o catalog.json
-          FIFA=$(jq -r '.apps[] | select(.name|test("fifa.?26";"i")) | .url' catalog.json | head -1)
-          GTA=$(jq -r '.apps[] | select(.name|test("gta|san.?andreas";"i")) | .url' catalog.json | head -1)
-
-          cat > man.py <<'PY'
-          import sys
-          from androguard.core.apk import APK
-          a=APK(sys.argv[1]); ns='{http://schemas.android.com/apk/res/android}'
-          print("package:", a.get_package(), "| sharedUserId:", a.get_android_manifest_xml().get(ns+'sharedUserId'))
-          crit=[p for p in a.get_permissions() if any(k in p for k in ("SETTING","SECURE","STORAGE","INSTALL","WRITE","SYSTEM_ALERT","PACKAGE","CONFIG","ACCESSIBILITY","OVERLAY"))]
-          print("PERMISSOES CRITICAS:", *sorted(crit), sep="\n   ")
-          PY
-
-          dl(){ curl -fsL --retry 6 --retry-all-errors -o "$2" "$1"; echo "$2 $(du -h "$2"|cut -f1) $(unzip -l "$2" >/dev/null 2>&1 && echo OK || echo TRUNCADO)"; }
-
-          echo "############## FIFA 26 ##############"; dl "$FIFA" fifa.apk; /tmp/venv/bin/python man.py fifa.apk; rm -f fifa.apk
-          echo; echo "############## GTA ##############"; dl "$GTA" gta.apk; /tmp/venv/bin/python man.py gta.apk
-          mkdir -p xg && (cd xg && unzip -o -q ../gta.apk 'classes*.dex' 'lib/*/libapp.so' 2>/dev/null)
-          echo "--- GTA: contexto de setprop / Settings\$Global / secure / driver ---"
-          grep -rhoaE ".{0,24}(setprop |Settings\\\$Global|WRITE_SECURE_SETTINGS|put (global|secure) |angle_gl|game_driver|debug\.hwui|persist\.sys\.[a-z]).{0,44}" xg 2>/dev/null | sort -u | head -50
-          echo "--- GTA: termos de gráfico/driver soltos ---"
-          grep -rhoaE "angle|vulkan|opengl|gralloc|renderer|GLES|eglChoose|hwui|skia" xg 2>/dev/null | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn | head -20
-          rm -rf xg gta.apk
-          echo; echo "===== FIM ====="
+          echo "=== app_version.json (producao) ==="; curl -s "$B/app_version.json"; echo
+          echo "=== app_version_test.json (canal de teste) ==="; curl -s "$B/f/app_version_test.json"; echo
+          echo "=== HEAD do APK de teste ==="; curl -sI "$B/f/app/Unlock_BYD-teste.apk" | grep -iE "HTTP/|content-length|content-type"
+          echo "=== versionCode no gradle da fix-fifa-gta (o que deveria estar publicado) ==="
+          curl -s "https://raw.githubusercontent.com/Eulernote/Unlock_BYD/fix-fifa-gta/app/build.gradle.kts" | grep -i versioncode
