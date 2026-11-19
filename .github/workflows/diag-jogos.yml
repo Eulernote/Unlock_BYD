@@ -14,7 +14,7 @@ jobs:
       - name: Ferramentas
         run: |
           sudo apt-get update -q && sudo apt-get install -y -q jq unzip
-          python3 -m pip install --break-system-packages --root-user-action=ignore androguard
+          sudo python3 -m pip install --break-system-packages --root-user-action=ignore androguard
           python3 -c "import androguard; print('androguard OK')"
 
       - name: Analisar
@@ -27,32 +27,21 @@ jobs:
 
           cat > man.py <<'PY'
           import sys
-          try:
-              from androguard.core.apk import APK
-          except Exception:
-              from androguard.core.bytecodes.apk import APK
+          from androguard.core.apk import APK
           a=APK(sys.argv[1]); ns='{http://schemas.android.com/apk/res/android}'
           print("package:", a.get_package(), "| sharedUserId:", a.get_android_manifest_xml().get(ns+'sharedUserId'))
-          crit=[p for p in a.get_permissions() if any(k in p for k in ("SETTINGS","SECURE","STORAGE","INSTALL","WRITE","SYSTEM_ALERT","PACKAGE","CHANGE_CONFIG","ACCESSIBILITY"))]
-          print("PERMISSOES CRITICAS:")
-          for p in sorted(crit): print("   ", p)
+          crit=[p for p in a.get_permissions() if any(k in p for k in ("SETTING","SECURE","STORAGE","INSTALL","WRITE","SYSTEM_ALERT","PACKAGE","CONFIG","ACCESSIBILITY","OVERLAY"))]
+          print("PERMISSOES CRITICAS:", *sorted(crit), sep="\n   ")
           PY
 
-          dl(){ curl -fL --retry 6 --retry-all-errors --connect-timeout 20 -o "$2" "$1"; echo "tamanho: $(du -h "$2"|cut -f1)"; unzip -l "$2" >/dev/null 2>&1 && echo "zip OK" || echo "ZIP CORROMPIDO/TRUNCADO"; }
+          dl(){ curl -fsL --retry 6 --retry-all-errors -o "$2" "$1"; echo "$2 $(du -h "$2"|cut -f1) $(unzip -l "$2" >/dev/null 2>&1 && echo OK || echo TRUNCADO)"; }
 
-          echo "############## FIFA 26 ##############"
-          dl "$FIFA" fifa.apk
-          python3 -I man.py fifa.apk
-          rm -f fifa.apk
-
-          echo; echo "############## GTA (repack Flutter @alx) ##############"
-          dl "$GTA" gta.apk
-          python3 -I man.py gta.apk
-          echo "--- GTA: engine/libs ---"; unzip -l gta.apk 2>/dev/null | grep -oE "lib/[^/]+/[^ ]+\.so" | sed 's#lib/[^/]*/##' | sort -u
-          mkdir -p xg && (cd xg && unzip -o -q ../gta.apk 'classes*.dex' 'lib/*/libapp.so' 'assets/flutter_assets/*' 2>/dev/null)
-          echo "--- GTA: settings globais / driver gráfico / secure (pista nº1) ---"
-          grep -rhoaE "angle_gl_driver[a-z_]*|game_driver[a-z_]*|updatable_driver[a-z_]*|Settings\\\$Global|settings put (global|system|secure) [A-Za-z0-9_.]+|WRITE_SECURE_SETTINGS|debug\.hwui[a-z.]*|persist\.sys\.[a-z0-9._]+|setprop [a-z]" xg 2>/dev/null | sort | uniq -c | sort -rn | head -40
-          echo "--- GTA: cita FIFA / mexe em pasta de outro app / instala pacote? ---"
-          grep -rhoaE "com\.ea\.gp\.fifaworld|Android/(data|obb)/com\.[A-Za-z0-9_.]+|pm install[A-Za-z -]*|/data/local/tmp|MANAGE_EXTERNAL_STORAGE" xg 2>/dev/null | sort -u | head -30
+          echo "############## FIFA 26 ##############"; dl "$FIFA" fifa.apk; python3 man.py fifa.apk; rm -f fifa.apk
+          echo; echo "############## GTA ##############"; dl "$GTA" gta.apk; python3 man.py gta.apk
+          mkdir -p xg && (cd xg && unzip -o -q ../gta.apk 'classes*.dex' 'lib/*/libapp.so' 2>/dev/null)
+          echo "--- GTA: contexto de setprop / Settings\$Global / secure / driver ---"
+          grep -rhoaE ".{0,24}(setprop |Settings\\\$Global|WRITE_SECURE_SETTINGS|put (global|secure) |angle_gl|game_driver|debug\.hwui|persist\.sys\.[a-z]).{0,44}" xg 2>/dev/null | sort -u | head -50
+          echo "--- GTA: termos de gráfico/driver soltos ---"
+          grep -rhoaE "angle|vulkan|opengl|gralloc|renderer|GLES|eglChoose|hwui|skia" xg 2>/dev/null | tr 'A-Z' 'a-z' | sort | uniq -c | sort -rn | head -20
           rm -rf xg gta.apk
           echo; echo "===== FIM ====="
