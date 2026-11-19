@@ -22,7 +22,8 @@ object ClusterCast {
 
     // Códigos de abertura: 18 (DiLink antigo) e 16 (DiLink 5). Tentamos os dois.
     private val SERVICES = listOf("AutoContainer", "auto_container")
-    private val OPEN_CODES = listOf(18, 16)
+    // Código 46 é o que liga a projeção no v33 (DiLink5); 18/16 cobrem firmwares mais antigos.
+    private val OPEN_CODES = listOf(46, 18, 16)
 
     data class Result(val ok: Boolean, val detail: String)
 
@@ -34,24 +35,25 @@ object ClusterCast {
 
     /** Abre a superfície do cluster. Retorna o método que respondeu (ou vazio se nenhum). */
     private fun openSurface(ctx: Context): String {
+        // No v33 (DiLink5) o serviço de debug do cluster ajuda a criar a superfície de projeção.
+        AdbShell.run(ctx, "am startservice -n com.byd.clusterdebug/.ClusterDebugService 2>/dev/null", 6000)
         for (svc in SERVICES) for (code in OPEN_CODES) {
-            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 '' 2>/dev/null", 8000)
+            // s16 null (a string "null") — é o que o app de referência usa no v33.
+            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 null 2>/dev/null", 8000)
             if (r.ok && !r.output.contains("does not exist", true) && !r.output.contains("not found", true)
                 && !r.output.contains("Service $svc", true)) {
-                // service call devolve "Result: Parcel(...)" quando o serviço existe
-                if (r.output.contains("Result", true) || r.output.contains("Parcel", true) || r.output.isBlank())
+                if (r.output.contains("Parcel(00000000", true) || r.output.contains("Result", true) || r.output.isBlank())
                     return "$svc/$code"
             }
         }
         // Sem serviço: tenta subir o containerservice do fornecedor.
-        AdbShell.run(ctx, "am startservice --user 0 -n com.xdja.containerservice/.AutoDisplayService 2>/dev/null", 8000)
-        AdbShell.run(ctx, "am startservice --user 0 -n com.byd.containerservice/.AutoDisplayService 2>/dev/null", 6000)
+        AdbShell.run(ctx, "am startservice --user 0 -n com.xdja.containerservice/.AutoDisplayService 2>/dev/null", 6000)
         return ""
     }
 
-    /** Fecha/libera a superfície do cluster (código 0). */
+    /** Fecha/libera a superfície do cluster (sequência 46 → 18 → 0, como o app de referência). */
     private fun releaseSurface(ctx: Context) {
-        for (svc in SERVICES) AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 0 s16 '' 2>/dev/null", 6000)
+        for (svc in SERVICES) AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 46 s16 null 2>/dev/null; sleep 0.3; service call $svc 2 i32 1000 i32 18 s16 null 2>/dev/null; sleep 0.3; service call $svc 2 i32 1000 i32 0 s16 null 2>/dev/null", 8000)
     }
 
     // ---------- display do cluster ----------
@@ -59,17 +61,25 @@ object ClusterCast {
     /** Nomes que indicam o display do cluster. */
     private fun isClusterName(name: String): Boolean {
         val n = name.lowercase()
-        return n.contains("fission") || n.contains("xdjascreenprojection") || n.contains("cluster") || n.contains("instrument")
+        return n.contains("fission") || n.contains("xdja") || n.contains("virtualsurface") ||
+               n.contains("cluster") || n.contains("instrument")
     }
 
     /** Procura o display do cluster pelo DisplayManager (não precisa de ADB). -1 se não achar. */
     fun clusterDisplayId(ctx: Context): Int {
-        // 1) DisplayManager (só enxerga displays públicos ao app).
+        // 1) DisplayManager, categoria PRESENTATION (é onde o cluster virtual do v33 aparece).
         try {
             val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-            val match = dm.displays.filter { isClusterName(it.name) }
-            val id = (match.firstOrNull { it.displayId > 0 } ?: match.firstOrNull())?.displayId ?: -1
-            if (id > 0) return id
+            val lists = listOf(
+                dm.getDisplays("android.hardware.display.category.PRESENTATION"),
+                dm.displays
+            )
+            for (arr in lists) {
+                val match = arr.filter { it.displayId > 0 && isClusterName(it.name) }
+                if (match.isNotEmpty()) return match.first().displayId
+            }
+            // Qualquer display secundário na categoria PRESENTATION serve.
+            dm.getDisplays("android.hardware.display.category.PRESENTATION").firstOrNull { it.displayId > 0 }?.let { return it.displayId }
         } catch (e: Exception) {}
         // 2) Shell dumpsys: enxerga displays PRIVADOS (o cluster do BYD costuma ser privado).
         return clusterDisplayIdShell(ctx)
@@ -168,14 +178,22 @@ object ClusterCast {
     fun diagnose(ctx: Context): String {
         val sb = StringBuilder()
         sb.append("Displays antes de abrir:\n").append(displaysText(ctx)).append("\n\n")
-        sb.append("Testando abertura da superfície:\n")
+        AdbShell.run(ctx, "am startservice -n com.byd.clusterdebug/.ClusterDebugService 2>/dev/null", 6000)
+        sb.append("Testando abertura da superfície (s16 null):\n")
         for (svc in SERVICES) for (code in OPEN_CODES) {
-            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 '' 2>&1", 6000)
+            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 null 2>&1", 6000)
             val resumo = r.output.replace("\n", " ").take(80).ifBlank { r.reason }
             sb.append("  $svc code $code → ${if (r.ok) "ok" else "falhou"}: $resumo\n")
         }
-        Thread.sleep(800)
+        Thread.sleep(1500)
         sb.append("\nDisplays (app) depois de abrir:\n").append(displaysText(ctx)).append("\n")
+        // Categoria PRESENTATION: é onde o cluster virtual do v33 aparece.
+        sb.append("\nDisplays PRESENTATION (onde o cluster do v33 aparece):\n")
+        try {
+            val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val pres = dm.getDisplays("android.hardware.display.category.PRESENTATION")
+            sb.append(if (pres.isEmpty()) "  (nenhum)\n" else pres.joinToString("\n") { "  #${it.displayId} ${it.name}" } + "\n")
+        } catch (e: Exception) { sb.append("  (erro: ${e.message})\n") }
 
         // Lista crua pelo shell: enxerga displays privados (o cluster).
         sb.append("\n[shell] dumpsys display (displays lógicos):\n")
