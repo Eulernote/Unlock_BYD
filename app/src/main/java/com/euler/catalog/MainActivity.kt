@@ -1006,9 +1006,13 @@ class MainActivity : Activity() {
     }
 
     private fun showDiagnostic(text: String) {
-        val tvv = TextView(this); tvv.text = text; tvv.setTextColor(TEXT); tvv.textSize = 12f
-        tvv.setTypeface(Typeface.MONOSPACE); tvv.setPadding(dp(16), dp(16), dp(16), dp(16)); tvv.setTextIsSelectable(true)
-        val sv = ScrollView(this); sv.addView(tvv)
+        // Fundo branco e texto preto vibrante e em negrito, pra ler/fotografar sem precisar selecionar.
+        val tvv = TextView(this); tvv.text = text
+        tvv.setTextColor(0xFF000000.toInt()); tvv.textSize = 13f
+        tvv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+        tvv.setBackgroundColor(0xFFFFFFFF.toInt())
+        tvv.setPadding(dp(16), dp(16), dp(16), dp(16)); tvv.setTextIsSelectable(true)
+        val sv = ScrollView(this); sv.setBackgroundColor(0xFFFFFFFF.toInt()); sv.addView(tvv)
         android.app.AlertDialog.Builder(this).setTitle("Diagnóstico do cluster").setView(sv)
             .setPositiveButton("Fechar", null).show()
     }
