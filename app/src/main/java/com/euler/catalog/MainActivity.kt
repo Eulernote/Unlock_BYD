@@ -132,7 +132,11 @@ class MainActivity : Activity() {
 
         cleanTemps()
         scheduleDailyCheck()
-        if (Store.isOnboarded(this)) { checkGate(); startPolling() } else showOnboarding()
+        if (Store.isOnboarded(this)) {
+            checkGate(); startPolling()
+            // Se o app acabou de ser atualizado, o BYD apagou o auto-start: re-habilita sozinho.
+            Thread { Store.ensureAutostartAfterUpdate(applicationContext) }.start()
+        } else showOnboarding()
     }
 
     private val pollRunnable = object : Runnable {

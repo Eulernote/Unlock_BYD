@@ -87,6 +87,28 @@ object AdbShell {
         return Result(false, r.output, reason)
     }
 
+    /**
+     * Re-habilita a inicialização automática deste app na whitelist do BYD, de forma silenciosa.
+     * O BYD zera essa whitelist a cada instalação, então isto roda depois de cada atualização.
+     * Tenta todos os caminhos que o BYD usa, numa sessão só; sucesso = o shell rodou a sequência.
+     */
+    fun enableAutostart(ctx: Context): Result {
+        val pkg = ctx.packageName
+        val cmds = listOf(
+            "cmd appops set $pkg AUTO_START allow 2>/dev/null",
+            "cmd appops set $pkg BOOT_COMPLETED allow 2>/dev/null",
+            "appops set $pkg RUN_IN_BACKGROUND allow 2>/dev/null",
+            "appops set $pkg RUN_ANY_IN_BACKGROUND allow 2>/dev/null",
+            "appops set $pkg WAKE_LOCK allow 2>/dev/null",
+            "dumpsys deviceidle whitelist +$pkg 2>/dev/null",
+            "content call --uri content://com.byd.appstartup/whitelist --method add --arg '$pkg' 2>/dev/null",
+            "CUR=\$(settings get secure ssc_whitelist); [ \"\$CUR\" = null ] && CUR=; case \",\$CUR,\" in *,$pkg,*) ;; *) settings put secure ssc_whitelist \"\${CUR:+\$CUR,}$pkg\" ;; esac 2>/dev/null",
+            "echo UBYD_OK"
+        )
+        val r = run(ctx, cmds.joinToString(" ; "), 20000)
+        return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
+    }
+
     private fun parseDpmError(out: String): String = when {
         out.contains("already", true) && out.contains("owner", true) -> "já existe um owner/admin definido"
         out.contains("account", true) -> "há conta(s) cadastradas no carro — remova antes"

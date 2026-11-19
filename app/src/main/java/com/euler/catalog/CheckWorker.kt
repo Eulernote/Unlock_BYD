@@ -14,6 +14,8 @@ class CheckWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) 
                 // Travado: volta o instalador original da BYD (Lock) e, se pedido, apaga os apps da loja.
                 Store.applyRevoke(ctx, r.wipe)
             } else if (r.status == "active") {
+                // Depois de uma atualização do app, o BYD apaga o auto-start: re-habilita sozinho (via ADB).
+                try { Store.ensureAutostartAfterUpdate(ctx) } catch (e: Exception) {}
                 // Auto-atualização do próprio Unlock BYD (qualquer rede).
                 try { Updater.selfUpdateIfNeeded(ctx) } catch (e: Exception) {}
                 // Outros apps instalados: sempre que estiver no Wi-Fi (a cada checagem ~15 min).

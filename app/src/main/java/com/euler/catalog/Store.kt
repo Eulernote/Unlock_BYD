@@ -136,6 +136,22 @@ object Store {
     }
 
     /**
+     * O BYD zera a whitelist de inicialização automática a cada instalação, então, depois que o app
+     * se atualiza, ele some do auto-start. Isto re-habilita sozinho (silencioso, via ADB) uma vez por
+     * versão nova. Em carro sem depuração (ex.: Sealion) desiste após algumas tentativas, sem travar.
+     */
+    fun ensureAutostartAfterUpdate(ctx: Context) {
+        try {
+            val vc = ownVersionCode(ctx)
+            if (prefs(ctx).getInt("autostartVc", -1) == vc) return      // já re-habilitado nesta versão
+            val tries = prefs(ctx).getInt("autostartTries_$vc", 0)
+            if (tries >= 4) return                                       // desiste nesta versão
+            prefs(ctx).edit().putInt("autostartTries_$vc", tries + 1).apply()
+            if (AdbShell.enableAutostart(ctx).ok) prefs(ctx).edit().putInt("autostartVc", vc).apply()
+        } catch (e: Exception) {}
+    }
+
+    /**
      * Executa um comando vindo do painel. Hoje: "set-do" (setar Device Owner via ADB local).
      * Roda em thread de fundo; sempre reporta o resultado ao painel.
      */
