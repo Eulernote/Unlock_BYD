@@ -294,25 +294,23 @@ async function handle(request, env){
     if(p === '/api/cars' && request.method === 'GET'){
       if(!user) return json({error:'unauth'}, 401);
       const list = await env.KV.list({prefix:'car:'});
-      const cars = [];
-      for(const k of list.keys){
+      // Monta cada carro EM PARALELO (Promise.all) em vez de em fila — e as 5 leituras extras de cada
+      // carro também em paralelo. Mesma quantidade de leituras, mas o tempo cai de minutos p/ segundos.
+      const cars = (await Promise.all(list.keys.map(async (k) => {
         const c = await env.KV.get(k.name, {type:'json'});
-        if(c){
-          const sv = await getSeen(env, c.id);
-          const ver = await getVer(env, c.id);
-          const doSt = await getDo(env, c.id);
-          const cmd = await getCmd(env, c.id);
-          const testOn = await getTestFlag(env, c.id);
-          cars.push({
-            id:c.id, nome:c.nome, status:c.status, owner:c.owner, plan: c.plan||'basico', grupo: c.grupo||'byd_simples', ask: !!c.ask, wipe:!!c.wipe,
-            reg: fmt(c.reg), seen: fmt(sv || c.seen || c.reg), log: c.log||[], allowRemove: !!c.allowRemove,
-            vc: ver ? ver.vc : 0, sdk: ver ? ver.sdk : 0,
-            au: ver && Array.isArray(ver.au) ? ver.au.map(x => ({p:x.p, when: fmt(x.t)})) : null,
-            deviceOwner: doSt ? !!doSt.owner : null, doWhen: doSt ? fmt(doSt.at) : null, doDetail: doSt ? (doSt.detail||'') : '',
-            cmdPending: cmd ? cmd.type : null, test: testOn
-          });
-        }
-      }
+        if(!c) return null;
+        const [sv, ver, doSt, cmd, testOn] = await Promise.all([
+          getSeen(env, c.id), getVer(env, c.id), getDo(env, c.id), getCmd(env, c.id), getTestFlag(env, c.id)
+        ]);
+        return {
+          id:c.id, nome:c.nome, status:c.status, owner:c.owner, plan: c.plan||'basico', grupo: c.grupo||'byd_simples', ask: !!c.ask, wipe:!!c.wipe,
+          reg: fmt(c.reg), seen: fmt(sv || c.seen || c.reg), log: c.log||[], allowRemove: !!c.allowRemove,
+          vc: ver ? ver.vc : 0, sdk: ver ? ver.sdk : 0,
+          au: ver && Array.isArray(ver.au) ? ver.au.map(x => ({p:x.p, when: fmt(x.t)})) : null,
+          deviceOwner: doSt ? !!doSt.owner : null, doWhen: doSt ? fmt(doSt.at) : null, doDetail: doSt ? (doSt.detail||'') : '',
+          cmdPending: cmd ? cmd.type : null, test: testOn
+        };
+      }))).filter(Boolean);
       const tb = await testBuild(env);
       return json({cars: cars, me: cap(user), latest: await latestVc(env), testLatest: tb ? tb.vc : 0, files: FILE_ADMINS.indexOf(user) >= 0});
     }
