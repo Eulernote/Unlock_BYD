@@ -26,12 +26,14 @@ object ClusterCast {
     // Dicionário oficial BYD (clusterdebug/SecondActivity): sendInfo(1000, code, "").
     //   0 = host restaura stream do cluster · 16 =投屏 TELA CHEIA liga · 17 = 投屏 MEIA-TELA liga
     //   18 = projeção desliga · 29/30/31 = tela 8,8"/12,3"/10,25" · 35 = modo Di4.0 (redesenha gauges!)
-    // ON = 0 → 16 (restaura o stream e liga tela cheia). NÃO mandar 35/46 (redesenham o painel por cima).
-    private val ON_SEQUENCE = listOf(0, 16)
-    // Meia-tela (17): app numa parte, gauges na outra, sem sobrepor.
-    private val ON_SEQUENCE_HALF = listOf(0, 17)
-    // Sequência de DESLIGAR (volta o painel original da BYD): 18 → (1,5s) → 0.
-    private val OFF_SEQUENCE = listOf(18, 0)
+    // ON = 16 → 35 → 46 (original robusta): 16 liga tela cheia, 35 (Di4.0) FORÇA a criação do display
+    // fission_bg, 46 finaliza. Confirmado pela "reativação completa": só esta recria a 2ª tela de forma
+    // confiável (o 0→16 parava de criar o display depois que o serviço entrava em certos estados).
+    private val ON_SEQUENCE = listOf(16, 35, 46)
+    // Meia-tela (17) + 35/46 pra também forçar a criação.
+    private val ON_SEQUENCE_HALF = listOf(17, 35, 46)
+    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → 18 → 0.
+    private val OFF_SEQUENCE = listOf(46, 18, 0)
     // Modo de projeção atual (false = tela cheia / true = meia-tela). Afeta o próximo openSurface.
     @Volatile var halfScreen: Boolean = false
 
@@ -188,11 +190,12 @@ object ClusterCast {
         return allOk
     }
 
-    /** Desliga a projeção e volta o painel original da BYD (18 → 1,5s → 0). */
+    /** Desliga a projeção e volta o painel original da BYD (46 → 18 → 0). */
     private fun releaseSurface(ctx: Context) {
-        callCode(ctx, OFF_SEQUENCE[0])   // 18 — projeção off
-        Thread.sleep(1500)
-        callCode(ctx, OFF_SEQUENCE[1])   // 0 — restaura painel original
+        for ((i, code) in OFF_SEQUENCE.withIndex()) {
+            if (i > 0) Thread.sleep(1500)
+            callCode(ctx, code)
+        }
     }
 
     // ---------- display do cluster ----------
