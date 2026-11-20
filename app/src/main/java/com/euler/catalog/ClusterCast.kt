@@ -45,6 +45,22 @@ object ClusterCast {
     @Volatile var lastDisplayId: Int = -1
 
     // ---------- perfil do cluster (detecção automática por tamanho) ----------
+    //
+    // Tamanhos de cluster por modelo (referência p/ calibrar margens por tamanho):
+    //   8,8"  (1280×480, CALIBRADO no Waze/YouTube): Yuan Pro, Song Pro, King, Dolphin SE, Yuan Plus(?)
+    //   10,25" (a confirmar resolução): Atto 8(?), Seal(?)
+    //   12,3"  (a confirmar resolução): Song Plus(?)  -- o grandão, diferente
+    // (?) = informado como "se não me engano"; confirmar ao pegar o carro.
+    // Hoje as margens (geomFor) são medidas no 8,8" e ESCALADAS pela resolução real detectada,
+    // então 8,8" sai exato e os outros entram como 1ª aproximação até medir e fixar por tamanho.
+    // Quando for calibrar: medir no redimensionador, e dar um ramo por resolução aqui + no geomFor.
+
+    // Polegadas conhecidas por modelo (nome do catálogo → polegadas). Referência/documentação.
+    val MODEL_CLUSTER_INCHES: Map<String, Double> = mapOf(
+        "Yuan Pro" to 8.8, "Song Pro" to 8.8, "King" to 8.8, "Dolphin SE" to 8.8, "Yuan Plus" to 8.8,
+        "Atto 8" to 10.25, "Seal" to 10.25,
+        "Song Plus" to 12.3
+    )
 
     data class ClusterProfile(val found: Boolean, val displayId: Int, val w: Int, val h: Int, val density: Int) {
         val key get() = "${w}x${h}"

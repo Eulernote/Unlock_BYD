@@ -175,13 +175,13 @@ class MainActivity : Activity() {
         h.setPadding(0, 0, 0, dp(18))
         val logo = ImageView(this); logo.layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
         logo.background = rounded(0xFFFFFFFF.toInt(), 12); logo.setPadding(dp(5), dp(5), dp(5), dp(5)); logo.setImageResource(R.mipmap.ic_launcher)
-        // Atalho escondido: tocar 5× na logo abre o menu de depuração USB da BYD (pra carros já
-        // ativados, caso precise reabrir o ADB). Não fica à mostra.
+        // Atalho escondido: tocar 5× na logo abre o menu de ferramentas (ADB, diagnósticos, testes).
+        // Mantém a tela inicial limpa; só aparece pra quem sabe.
         logo.setOnClickListener {
             val now = System.currentTimeMillis()
             logoTaps = if (now - lastLogoTap > 1500) 1 else logoTaps + 1
             lastLogoTap = now
-            if (logoTaps >= 5) { logoTaps = 0; openBydDevTools() }
+            if (logoTaps >= 5) { logoTaps = 0; showHiddenToolsMenu() }
         }
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(dp(12), 0, 0, 0)
         // Título + versão instalada (ex.: "v15"), para conferir no carro qual versão está rodando.
@@ -285,6 +285,43 @@ class MainActivity : Activity() {
      * O segredo (confirmado nos apps de referência) é o extra "Development.verify.requestCode"=1
      * no intent pra com.byd.byddevelopmenttools. Cai no menu onde se ativa a Depuração USB.
      */
+    /** Menu escondido (5 toques na logo): ADB, diagnósticos e testes — fora da tela inicial. */
+    private fun showHiddenToolsMenu() {
+        val items = listOf(
+            "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
+            "Início automático (religar / diagnóstico)" to { showAutostart() },
+            "Diagnóstico do cluster" to {
+                toast("Rodando diagnóstico…")
+                Thread { val t = ClusterCast.diagnose(applicationContext); runOnUiThread { showDiagnostic(t) } }.start(); Unit
+            },
+            "Reativação completa do cluster" to {
+                toast("Tentando reativar o cluster (~1 min)…")
+                Thread { val t = ClusterCast.deepReactivate(applicationContext); runOnUiThread { showDiagnostic("Reativação completa do cluster\n\n$t") } }.start(); Unit
+            },
+            (if (ClusterCast.halfScreen) "Modo cluster: meia-tela (17) → trocar p/ tela cheia" else "Modo cluster: tela cheia (16) → trocar p/ meia-tela") to {
+                ClusterCast.halfScreen = !ClusterCast.halfScreen
+                toast(if (ClusterCast.halfScreen) "Meia-tela (17) — projete de novo" else "Tela cheia (16) — projete de novo"); Unit
+            },
+            "Tela limpa (esconder dock) · teste" to {
+                PipActivity.open(this); toast("Abrindo tela limpa… espere ~3s. Feche o X pra voltar o dock."); Unit
+            },
+            "Extrair APK do launcher" to {
+                toast("Extraindo…")
+                Thread { val r = AdbShell.extractLauncher(applicationContext); runOnUiThread { showDiagnostic("Extração do APK do launcher\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } }) } }.start(); Unit
+            },
+            "Extrair APKs do cluster" to {
+                toast("Extraindo…")
+                Thread { val r = AdbShell.extractClusterApks(applicationContext); runOnUiThread { showDiagnostic("Extração dos APKs do cluster\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } }) } }.start(); Unit
+            }
+        )
+        val labels = items.map { it.first }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Ferramentas (escondido)")
+            .setItems(labels) { _, which -> items[which].second.invoke() }
+            .setNegativeButton("Fechar", null)
+            .show()
+    }
+
     private fun openBydDevTools() {
         val pkg = "com.byd.byddevelopmenttools"
         for (cls in listOf("$pkg.MainActivity", "$pkg.VerificationActivity")) {
@@ -417,19 +454,27 @@ class MainActivity : Activity() {
         all.setOnClickListener { enqueueAll(visible) }
         container.addView(all)
 
+        // Carros com sistema Google: botão pra liberar a instalação de apps pelo próprio Unlock BYD.
+        if (Store.grupo(this) == "byd_google") {
+            val lib = Button(this); lib.text = "✓ Liberar instalação nesta loja"; styleBtn(lib, SURFACE2, TEXT)
+            lib.background = rounded(SURFACE2, 10, 1, BORDER); lib.setTextColor(TEXT)
+            val liblp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); liblp.topMargin = dp(8); lib.layoutParams = liblp
+            lib.setOnClickListener {
+                toast("Liberando instalação…")
+                Thread {
+                    val r = AdbShell.grantInstallPermission(applicationContext, applicationContext.packageName)
+                    runOnUiThread { toast(if (r.ok) "Instalação liberada ✓ — já pode instalar apps" else "Não consegui liberar: ${r.reason}") }
+                }.start()
+            }
+            container.addView(lib)
+        }
+
         // Projeção no cluster (opcional, via ADB). Abre a tela de configuração.
         val cl = Button(this); cl.text = "⤢ Projeção no cluster"; styleBtn(cl, SURFACE2, TEXT)
         cl.background = rounded(SURFACE2, 10, 1, BORDER); cl.setTextColor(TEXT)
         val clp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); clp.topMargin = dp(8); cl.layoutParams = clp
         cl.setOnClickListener { showClusterSettings() }
         container.addView(cl)
-
-        // Início automático: religar + diagnóstico (opcional, via ADB/acessibilidade).
-        val asb = Button(this); asb.text = "⟳ Início automático"; styleBtn(asb, SURFACE2, TEXT)
-        asb.background = rounded(SURFACE2, 10, 1, BORDER); asb.setTextColor(TEXT)
-        val aslp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); aslp.topMargin = dp(8); asb.layoutParams = aslp
-        asb.setOnClickListener { showAutostart() }
-        container.addView(asb)
 
         // Esconder/mostrar barras (superior e inferior) da multimídia — modo imersivo, via ADB.
         val barsHidden = Store.barsHidden(this)
@@ -449,42 +494,6 @@ class MainActivity : Activity() {
             }.start()
         }
         container.addView(bars)
-
-        // Tela limpa: entra em PiP pra o launcher esconder o dock da home (teste).
-        val clean = Button(this); clean.text = "🖼 Tela limpa (esconder dock) · teste"; styleBtn(clean, SURFACE2, TEXT)
-        clean.background = rounded(SURFACE2, 10, 1, BORDER); clean.setTextColor(TEXT)
-        val cllp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); cllp.topMargin = dp(8); clean.layoutParams = cllp
-        clean.setOnClickListener {
-            PipActivity.open(this)
-            toast("Abrindo tela limpa… espere ~3s na home. Feche a janelinha (X) pra voltar o dock.")
-        }
-        container.addView(clean)
-
-        // Extrair o APK do launcher pro Download (pra análise, se o PiP não resolver).
-        val ext = Button(this); ext.text = "⬇ Extrair APK do launcher · teste"; styleBtn(ext, SURFACE2, TEXT)
-        ext.background = rounded(SURFACE2, 10, 1, BORDER); ext.setTextColor(TEXT)
-        val extlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); extlp.topMargin = dp(8); ext.layoutParams = extlp
-        ext.setOnClickListener {
-            toast("Extraindo o APK do launcher…")
-            Thread {
-                val r = AdbShell.extractLauncher(applicationContext)
-                runOnUiThread { showDiagnostic("Extração do APK do launcher\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } }) }
-            }.start()
-        }
-        container.addView(ext)
-
-        // Extrair os APKs do cluster (containerservice + clusterdebug) pra análise.
-        val extCl = Button(this); extCl.text = "⬇ Extrair APKs do cluster · teste"; styleBtn(extCl, SURFACE2, TEXT)
-        extCl.background = rounded(SURFACE2, 10, 1, BORDER); extCl.setTextColor(TEXT)
-        val extCllp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); extCllp.topMargin = dp(8); extCl.layoutParams = extCllp
-        extCl.setOnClickListener {
-            toast("Extraindo os APKs do cluster…")
-            Thread {
-                val r = AdbShell.extractClusterApks(applicationContext)
-                runOnUiThread { showDiagnostic("Extração dos APKs do cluster\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } }) }
-            }.start()
-        }
-        container.addView(extCl)
 
         for (e in visible) container.addView(appCard(e))
 
@@ -993,7 +1002,17 @@ class MainActivity : Activity() {
             when (i?.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
                 PackageInstaller.STATUS_SUCCESS -> {
                     val pkg = i.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME)
-                    if (pkg != null) Thread { grantAll(pkg) }.start()
+                    if (pkg != null) Thread {
+                        grantAll(pkg)
+                        // Carros com sistema Google (sem Device Owner): libera instalação pelo shell e,
+                        // se for o Taskbar, injeta os ajustes de janela flutuante (vídeo em movimento).
+                        if (Store.grupo(applicationContext) == "byd_google") {
+                            AdbShell.grantInstallPermission(applicationContext, pkg)
+                            if (pkg.contains("taskbar", true) || pkg.startsWith("com.farmerbb.taskbar")) {
+                                AdbShell.enableTaskbarFreeform(applicationContext)
+                            }
+                        }
+                    }.start()
                     val cur = current
                     if (cur != null) { markInstalled(cur.pkg); Store.setBuild(applicationContext, cur.pkg, cur.build); showManual(cur); current = null; processNext() }
                 }
@@ -1108,35 +1127,8 @@ class MainActivity : Activity() {
             if (Store.clusterMode(this) == "gesture4" && canOverlay())
                 card.addView(tv("4 dedos para a ESQUERDA = enviar ao cluster; para a DIREITA = trazer de volta. ATENÇÃO: no modo tela toda, 1 dedo pode ficar bloqueado — segure o ícone ⤢ para desligar o modo. É um teste.", 12f, 0xFFF2C25B.toInt()).apply { setPadding(0, dp(12), 0, 0) })
 
-            // Modo de projeção: tela cheia (16) × meia-tela (17) · teste
-            val half = Button(this)
-            half.text = if (ClusterCast.halfScreen) "▭ Modo: meia-tela (17) · teste" else "▭ Modo: tela cheia (16) · teste"
-            styleBtn(half, SURFACE2, TEXT); half.background = rounded(SURFACE2, 9, 1, BORDER)
-            val hlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); hlp.topMargin = dp(18); half.layoutParams = hlp
-            half.setOnClickListener {
-                ClusterCast.halfScreen = !ClusterCast.halfScreen
-                toast(if (ClusterCast.halfScreen) "Meia-tela (17) — projete de novo p/ ver" else "Tela cheia (16) — projete de novo p/ ver")
-                showClusterSettings()
-            }
-            card.addView(half)
-
-            // Diagnóstico
-            val diag = Button(this); diag.text = "Diagnóstico do cluster"; styleBtn(diag, SURFACE2, TEXT); diag.background = rounded(SURFACE2, 9, 1, BORDER)
-            val dlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); dlp.topMargin = dp(18); diag.layoutParams = dlp
-            diag.setOnClickListener {
-                toast("Rodando diagnóstico…")
-                Thread { val txt = ClusterCast.diagnose(applicationContext); runOnUiThread { showDiagnostic(txt) } }.start()
-            }
-            card.addView(diag)
-
-            // Reativação completa (diagnóstico): tenta várias sequências até recriar a 2ª tela.
-            val deep = Button(this); deep.text = "⟳ Reativação completa do cluster · teste"; styleBtn(deep, SURFACE2, TEXT); deep.background = rounded(SURFACE2, 9, 1, BORDER)
-            val deeplp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); deeplp.topMargin = dp(10); deep.layoutParams = deeplp
-            deep.setOnClickListener {
-                toast("Tentando reativar o cluster (pode levar ~1 min)…")
-                Thread { val txt = ClusterCast.deepReactivate(applicationContext); runOnUiThread { showDiagnostic("Reativação completa do cluster\n\n$txt") } }.start()
-            }
-            card.addView(deep)
+            // Diagnóstico, reativação completa e modo de projeção (teste) foram para o menu escondido
+            // (5 toques na logo), pra deixar esta tela limpa.
         }
 
         container.addView(card)

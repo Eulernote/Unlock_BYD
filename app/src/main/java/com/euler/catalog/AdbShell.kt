@@ -173,6 +173,30 @@ object AdbShell {
             Result(true, r.output) else Result(false, r.output, r.reason.ifBlank { r.output.take(120) })
     }
 
+    /** Libera a permissão de instalar apps (REQUEST_INSTALL_PACKAGES) para um pacote, via shell.
+     *  Usado nos carros com sistema Google, onde não há Device Owner pra conceder isso. */
+    fun grantInstallPermission(ctx: Context, pkg: String): Result {
+        val cmd =
+            "appops set $pkg REQUEST_INSTALL_PACKAGES allow 2>&1; " +
+            "cmd appops set $pkg REQUEST_INSTALL_PACKAGES allow 2>/dev/null; " +
+            "echo UBYD_OK"
+        val r = run(ctx, cmd, 15000)
+        return if (r.output.contains("UBYD_OK") && !r.output.contains("Exception", true))
+            Result(true, r.output) else Result(false, r.output, r.reason.ifBlank { r.output.take(120) })
+    }
+
+    /** Injeta os 3 ajustes de janela flutuante (freeform) que o Taskbar precisa p/ vídeo em movimento. */
+    fun enableTaskbarFreeform(ctx: Context): Result {
+        val cmd =
+            "settings put global enable_freeform_support 1 2>&1; " +
+            "settings put global force_resizable_activities 1 2>&1; " +
+            "settings put secure freeform_window_management 1 2>&1; " +
+            "echo UBYD_OK"
+        val r = run(ctx, cmd, 15000)
+        return if (r.output.contains("UBYD_OK") && !r.output.contains("Exception", true))
+            Result(true, r.output) else Result(false, r.output, r.reason.ifBlank { r.output.take(120) })
+    }
+
     /** Descobre o launcher (app da home) e copia o(s) APK(s) dele para /sdcard/Download. */
     fun extractLauncher(ctx: Context): Result {
         val cmd =
