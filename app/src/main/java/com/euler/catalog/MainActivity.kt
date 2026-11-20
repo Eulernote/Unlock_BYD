@@ -460,6 +460,19 @@ class MainActivity : Activity() {
         }
         container.addView(clean)
 
+        // Extrair o APK do launcher pro Download (pra análise, se o PiP não resolver).
+        val ext = Button(this); ext.text = "⬇ Extrair APK do launcher · teste"; styleBtn(ext, SURFACE2, TEXT)
+        ext.background = rounded(SURFACE2, 10, 1, BORDER); ext.setTextColor(TEXT)
+        val extlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); extlp.topMargin = dp(8); ext.layoutParams = extlp
+        ext.setOnClickListener {
+            toast("Extraindo o APK do launcher…")
+            Thread {
+                val r = AdbShell.extractLauncher(applicationContext)
+                runOnUiThread { showDiagnostic("Extração do APK do launcher\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } }) }
+            }.start()
+        }
+        container.addView(ext)
+
         for (e in visible) container.addView(appCard(e))
 
         if (dpm.isDeviceOwnerApp(packageName)) {

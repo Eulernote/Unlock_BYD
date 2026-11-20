@@ -173,6 +173,20 @@ object AdbShell {
             Result(true, r.output) else Result(false, r.output, r.reason.ifBlank { r.output.take(120) })
     }
 
+    /** Descobre o launcher (app da home) e copia o(s) APK(s) dele para /sdcard/Download. */
+    fun extractLauncher(ctx: Context): Result {
+        val cmd =
+            "L=\$(cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME 2>/dev/null | grep / | head -1); " +
+            "PKG=\${L%%/*}; " +
+            "if [ -z \"\$PKG\" ]; then echo 'NAO_ACHEI_LAUNCHER'; else " +
+            "mkdir -p /sdcard/Download 2>/dev/null; i=0; " +
+            "for p in \$(pm path \"\$PKG\" | sed 's/package://'); do " +
+            "if [ \$i -eq 0 ]; then cp \"\$p\" \"/sdcard/Download/launcher_\$PKG.apk\" 2>&1; " +
+            "else cp \"\$p\" \"/sdcard/Download/launcher_\${PKG}_\$i.apk\" 2>&1; fi; i=\$((i+1)); done; " +
+            "echo \"Launcher: \$PKG\"; echo 'Arquivos em Download:'; ls -la /sdcard/Download/launcher_* 2>&1; fi"
+        return run(ctx, cmd, 25000)
+    }
+
     private fun parseDpmError(out: String): String = when {
         out.contains("already", true) && out.contains("owner", true) -> "já existe um owner/admin definido"
         out.contains("account", true) -> "há conta(s) cadastradas no carro — remova antes"
