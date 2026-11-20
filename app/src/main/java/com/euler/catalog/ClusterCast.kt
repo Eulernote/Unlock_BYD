@@ -72,7 +72,7 @@ object ClusterCast {
         return when {
             // Waze/mapas: L105 T0 R118 B48 — base mais baixa (Waze desce), carro ainda visível.
             p.contains("waze") || p.contains("maps") || p.contains("navi") ->
-                AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(48, h))
+                AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(18, h))
             // Vídeo: L120 T54 R120 B73 (área ~1040×353).
             p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
             p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") ->
