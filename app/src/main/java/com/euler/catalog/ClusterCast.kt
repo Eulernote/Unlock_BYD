@@ -23,12 +23,17 @@ object ClusterCast {
 
     // O serviço real do fornecedor é "AutoContainer" (o "auto_container" não existe no v33).
     private const val SVC = "AutoContainer"
-    // Sequência de LIGAR a projeção no v33 (DiLink5), confirmada no app de referência:
-    //   16 (prepara) → 35 (cria a superfície fission_bg_xdjaVirtualSurface) → 46 (mostra no painel).
-    // Cada comando com ~1s de intervalo, todos com s16 null.
-    private val ON_SEQUENCE = listOf(16, 35, 46)
-    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → (1,5s) → 18 → 0.
-    private val OFF_SEQUENCE = listOf(46, 18, 0)
+    // Dicionário oficial BYD (clusterdebug/SecondActivity): sendInfo(1000, code, "").
+    //   0 = host restaura stream do cluster · 16 =投屏 TELA CHEIA liga · 17 = 投屏 MEIA-TELA liga
+    //   18 = projeção desliga · 29/30/31 = tela 8,8"/12,3"/10,25" · 35 = modo Di4.0 (redesenha gauges!)
+    // ON = 0 → 16 (restaura o stream e liga tela cheia). NÃO mandar 35/46 (redesenham o painel por cima).
+    private val ON_SEQUENCE = listOf(0, 16)
+    // Meia-tela (17): app numa parte, gauges na outra, sem sobrepor.
+    private val ON_SEQUENCE_HALF = listOf(0, 17)
+    // Sequência de DESLIGAR (volta o painel original da BYD): 18 → (1,5s) → 0.
+    private val OFF_SEQUENCE = listOf(18, 0)
+    // Modo de projeção atual (false = tela cheia / true = meia-tela). Afeta o próximo openSurface.
+    @Volatile var halfScreen: Boolean = false
 
     data class Result(val ok: Boolean, val detail: String)
 
@@ -58,10 +63,10 @@ object ClusterCast {
     private fun geomFor(pkg: String, h: Int): AppGeom {
         val base = baseDensity(h)
         val p = pkg.lowercase()
+        // Tela cheia pra todos (sem letterbox): o app ocupa os 1280×480 inteiros.
+        // Vídeo (16:9) num ultrawide fica com o próprio letterbox interno do app; mapa preenche tudo.
         return when {
             p.contains("waze") || p.contains("maps") || p.contains("navi") -> AppGeom((base - 10).coerceAtLeast(140), false)
-            p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
-            p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") -> AppGeom(base, true)
             else -> AppGeom(base, false)
         }
     }
@@ -165,26 +170,25 @@ object ClusterCast {
     }
 
     /**
-     * Liga a projeção do painel: manda a sequência 16 → 35 → 46 (s16 null), ~1s entre cada.
-     * É o 35 que faz o com.xdja.containerservice criar o display fission_bg_xdjaVirtualSurface.
+     * Liga a projeção do painel: 0 (restaura stream) → 16 tela cheia (ou 17 meia-tela).
+     * O com.xdja.containerservice cria o display fission_bg_xdjaVirtualSurface.
      * Retorna true se todos os comandos responderam ok.
      */
     private fun openSurface(ctx: Context): Boolean {
         var allOk = true
-        for ((i, code) in ON_SEQUENCE.withIndex()) {
+        val seq = if (halfScreen) ON_SEQUENCE_HALF else ON_SEQUENCE
+        for ((i, code) in seq.withIndex()) {
             if (i > 0) Thread.sleep(1000)
             if (!callCode(ctx, code)) allOk = false
         }
         return allOk
     }
 
-    /** Desliga a projeção e volta o painel original da BYD (46 → 1,5s → 18 → 0). */
+    /** Desliga a projeção e volta o painel original da BYD (18 → 1,5s → 0). */
     private fun releaseSurface(ctx: Context) {
-        callCode(ctx, OFF_SEQUENCE[0])   // 46
+        callCode(ctx, OFF_SEQUENCE[0])   // 18 — projeção off
         Thread.sleep(1500)
-        callCode(ctx, OFF_SEQUENCE[1])   // 18
-        Thread.sleep(1000)
-        callCode(ctx, OFF_SEQUENCE[2])   // 0
+        callCode(ctx, OFF_SEQUENCE[1])   // 0 — restaura painel original
     }
 
     // ---------- display do cluster ----------
@@ -384,7 +388,7 @@ object ClusterCast {
         sb.append("\n")
 
         sb.append("Displays antes de abrir:\n").append(displaysText(ctx)).append("\n\n")
-        sb.append("Ligando a projeção (sequência 16 → 35 → 46, s16 null, ~1s entre cada):\n")
+        sb.append("Ligando a projeção (sequência ${ON_SEQUENCE.joinToString(" → ")}, s16 null, ~1s entre cada):\n")
         for ((i, code) in ON_SEQUENCE.withIndex()) {
             if (i > 0) Thread.sleep(1000)
             val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 6000)

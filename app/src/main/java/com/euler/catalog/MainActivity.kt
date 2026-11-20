@@ -1108,6 +1108,18 @@ class MainActivity : Activity() {
             if (Store.clusterMode(this) == "gesture4" && canOverlay())
                 card.addView(tv("4 dedos para a ESQUERDA = enviar ao cluster; para a DIREITA = trazer de volta. ATENÇÃO: no modo tela toda, 1 dedo pode ficar bloqueado — segure o ícone ⤢ para desligar o modo. É um teste.", 12f, 0xFFF2C25B.toInt()).apply { setPadding(0, dp(12), 0, 0) })
 
+            // Modo de projeção: tela cheia (16) × meia-tela (17) · teste
+            val half = Button(this)
+            half.text = if (ClusterCast.halfScreen) "▭ Modo: meia-tela (17) · teste" else "▭ Modo: tela cheia (16) · teste"
+            styleBtn(half, SURFACE2, TEXT); half.background = rounded(SURFACE2, 9, 1, BORDER)
+            val hlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); hlp.topMargin = dp(18); half.layoutParams = hlp
+            half.setOnClickListener {
+                ClusterCast.halfScreen = !ClusterCast.halfScreen
+                toast(if (ClusterCast.halfScreen) "Meia-tela (17) — projete de novo p/ ver" else "Tela cheia (16) — projete de novo p/ ver")
+                showClusterSettings()
+            }
+            card.addView(half)
+
             // Diagnóstico
             val diag = Button(this); diag.text = "Diagnóstico do cluster"; styleBtn(diag, SURFACE2, TEXT); diag.background = rounded(SURFACE2, 9, 1, BORDER)
             val dlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); dlp.topMargin = dp(18); diag.layoutParams = dlp
