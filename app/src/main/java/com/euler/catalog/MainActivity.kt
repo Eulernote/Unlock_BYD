@@ -1021,6 +1021,7 @@ class MainActivity : Activity() {
             .setTitle("Início automático")
             .setMessage("Religa o início automático do Unlock BYD — necessário para a loja continuar atualizando os apps sozinha depois de cada versão. Abre a tela da BYD e liga o botão do app automaticamente.")
             .setPositiveButton("Reativar agora") { _, _ ->
+                if (!Store.autostartAllowed(applicationContext)) { toast("Início automático é só para BYD simples (este carro é ${Store.grupo(applicationContext)})"); return@setPositiveButton }
                 toast("Reativando…")
                 Thread {
                     val a = AdbShell.enableAccessibilityService(applicationContext)

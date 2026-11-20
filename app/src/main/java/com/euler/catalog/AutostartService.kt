@@ -32,6 +32,8 @@ class AutostartService : AccessibilityService() {
 
     override fun onServiceConnected() {
         instance = this
+        // Início automático é só pra BYD simples (Google/Chery/Geely ficam de fora).
+        if (!Store.autostartAllowed(applicationContext)) return
         // Auto-cura: toda vez que (re)conecta — inclusive logo após uma atualização — religa
         // o início automático sozinho, sem precisar abrir o app nem apertar botão.
         Thread {
