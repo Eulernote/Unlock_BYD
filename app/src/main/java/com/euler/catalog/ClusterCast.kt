@@ -54,22 +54,28 @@ object ClusterCast {
         }
     }
 
-    /** Geometria a aplicar num app: densidade + margens (px) reservadas no topo/base pras barras do BYD. */
-    data class AppGeom(val density: Int, val insetTop: Int, val insetBottom: Int)
+    /** Geometria a aplicar num app: densidade + margens (px) reservadas nos 4 lados (overscan L,T,R,B). */
+    data class AppGeom(val density: Int, val insetLeft: Int, val insetTop: Int, val insetRight: Int, val insetBottom: Int)
 
     /** Densidade-base: mira ~480dp no lado curto (paisagem tipo tablet). 480px de altura → 160dpi. */
     private fun baseDensity(h: Int): Int = (h * 160 / 480).coerceIn(140, 220)
 
-    private fun geomFor(pkg: String, h: Int): AppGeom {
+    // Margens medidas manualmente no cluster 1280×480 (redimensionador). Escaladas p/ outros tamanhos.
+    private fun scaleX(v: Int, w: Int) = (v * w / 1280)
+    private fun scaleY(v: Int, h: Int) = (v * h / 480)
+
+    private fun geomFor(pkg: String, w: Int, h: Int): AppGeom {
         val base = baseDensity(h)
         val p = pkg.lowercase()
-        // Para mapas/navegação: reserva as faixas do OSD do BYD (topo ~15%, base ~19%) para o app
-        // desenhar só na faixa central visível — assim o carro do Waze não fica escondido atrás da
-        // barra de bateria. O "preto" das margens fica embaixo das barras do BYD, então não sobra tarja.
         return when {
+            // Waze/mapas: L105 T0 R118 B78 (área ~1058×402) — carro visível, fora das barras do BYD.
             p.contains("waze") || p.contains("maps") || p.contains("navi") ->
-                AppGeom((base - 10).coerceAtLeast(140), (h * 15 / 100), (h * 19 / 100))
-            else -> AppGeom(base, 0, 0)   // vídeo/resto: tela cheia
+                AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(78, h))
+            // Vídeo: L120 T54 R120 B73 (área ~1040×353).
+            p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
+            p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") ->
+                AppGeom(base, scaleX(120, w), scaleY(54, h), scaleX(120, w), scaleY(73, h))
+            else -> AppGeom(base, 0, 0, 0, 0)   // resto: tela cheia
         }
     }
 
@@ -99,9 +105,9 @@ object ClusterCast {
     /** Aplica a geometria no display do cluster: densidade + margens (topo/base) pras barras do BYD. */
     private fun applyGeom(ctx: Context, id: Int, w: Int, h: Int, g: AppGeom) {
         AdbShell.run(ctx, "wm density ${g.density} -d $id 2>&1", 8000)
-        if (g.insetTop > 0 || g.insetBottom > 0) {
-            // overscan = left,top,right,bottom (px). Reserva só o topo/base; largura inteira.
-            AdbShell.run(ctx, "wm overscan 0,${g.insetTop},0,${g.insetBottom} -d $id 2>&1", 8000)
+        if (g.insetLeft > 0 || g.insetTop > 0 || g.insetRight > 0 || g.insetBottom > 0) {
+            // overscan = left,top,right,bottom (px).
+            AdbShell.run(ctx, "wm overscan ${g.insetLeft},${g.insetTop},${g.insetRight},${g.insetBottom} -d $id 2>&1", 8000)
         } else {
             AdbShell.run(ctx, "wm overscan reset -d $id 2>&1", 8000)
         }
@@ -328,7 +334,7 @@ object ClusterCast {
         val comp = resolveLaunchComponent(ctx, pkg) ?: run { releaseSurface(ctx); return Result(false, "sem activity pública em $pkg") }
 
         // Ajusta densidade/letterbox conforme o perfil, ANTES de abrir o app.
-        val geom = geomFor(pkg, if (prof.found && prof.h > 0) prof.h else 480)
+        val geom = geomFor(pkg, if (prof.found && prof.w > 0) prof.w else 1280, if (prof.found && prof.h > 0) prof.h else 480)
         applyGeom(ctx, id, prof.w, prof.h, geom)
 
         // Move a stack e relança o launcher no display do cluster (o que de fato renderiza).
@@ -339,7 +345,7 @@ object ClusterCast {
             return Result(false, "falhei ao abrir no cluster: ${r.output.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: r.reason}")
         }
         lastPkg = pkg; lastComp = comp; lastDisplayId = id
-        val extra = if (prof.found) " · ${prof.label} · dens ${geom.density}${if (geom.insetTop > 0 || geom.insetBottom > 0) " · margem ${geom.insetTop}/${geom.insetBottom}" else ""}" else ""
+        val extra = if (prof.found) " · ${prof.label} · dens ${geom.density}${if (geom.insetLeft > 0 || geom.insetTop > 0 || geom.insetRight > 0 || geom.insetBottom > 0) " · margem ${geom.insetLeft}/${geom.insetTop}/${geom.insetRight}/${geom.insetBottom}" else ""}" else ""
         return Result(true, "$pkg → cluster$extra")
     }
 
@@ -421,8 +427,8 @@ object ClusterCast {
         sb.append("\n")
         val pkgNow = foregroundPackage(ctx)
         if (prof.found && pkgNow != null) {
-            val g = geomFor(pkgNow, prof.h)
-            sb.append("Geometria p/ $pkgNow: densidade ${g.density}${if (g.insetTop > 0 || g.insetBottom > 0) " · margem topo ${g.insetTop} / base ${g.insetBottom}" else ""}\n")
+            val g = geomFor(pkgNow, prof.w, prof.h)
+            sb.append("Geometria p/ $pkgNow: densidade ${g.density}${if (g.insetLeft > 0 || g.insetTop > 0 || g.insetRight > 0 || g.insetBottom > 0) " · margem L${g.insetLeft}/T${g.insetTop}/R${g.insetRight}/B${g.insetBottom}" else ""}\n")
         }
 
         sb.append("\n[shell] app em primeiro plano (tentativas):\n")
