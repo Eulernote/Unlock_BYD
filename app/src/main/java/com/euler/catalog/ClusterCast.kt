@@ -26,10 +26,11 @@ object ClusterCast {
     // Dicionário oficial BYD (clusterdebug/SecondActivity): sendInfo(1000, code, "").
     //   0 = host restaura stream do cluster · 16 =投屏 TELA CHEIA liga · 17 = 投屏 MEIA-TELA liga
     //   18 = projeção desliga · 29/30/31 = tela 8,8"/12,3"/10,25" · 35 = modo Di4.0 (redesenha gauges!)
-    // ON = 0 → 16 (restaura o stream e liga tela cheia). NÃO mandar 35/46 (redesenham o painel por cima).
-    private val ON_SEQUENCE = listOf(0, 16)
+    // ON = 18 → 0 → 16 (desliga limpo p/ zerar estado travado, restaura o stream, liga tela cheia).
+    // O 18 inicial recupera o cluster quando ele fica "meio ligado" e não recria a segunda tela.
+    private val ON_SEQUENCE = listOf(18, 0, 16)
     // Meia-tela (17): app numa parte, gauges na outra, sem sobrepor.
-    private val ON_SEQUENCE_HALF = listOf(0, 17)
+    private val ON_SEQUENCE_HALF = listOf(18, 0, 17)
     // Sequência de DESLIGAR (volta o painel original da BYD): 18 → (1,5s) → 0.
     private val OFF_SEQUENCE = listOf(18, 0)
     // Modo de projeção atual (false = tela cheia / true = meia-tela). Afeta o próximo openSurface.
