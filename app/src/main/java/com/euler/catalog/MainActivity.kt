@@ -285,9 +285,32 @@ class MainActivity : Activity() {
      * O segredo (confirmado nos apps de referência) é o extra "Development.verify.requestCode"=1
      * no intent pra com.byd.byddevelopmenttools. Cai no menu onde se ativa a Depuração USB.
      */
+    /** Procura atualização do próprio Unlock BYD na hora (teste ou produção) e instala se achar. */
+    private fun checkUpdatesNow() {
+        toast("Procurando atualização…")
+        Thread {
+            val own = ownVersionCode()
+            val r = try { Store.register(applicationContext) } catch (e: Exception) { null }   // testVc/testUrl frescos
+            val sv = Store.selfVersion()                                                        // produção (vc, url)
+            var tgtVc = 0; var tgtUrl = ""
+            if (r != null && r.testVc > own && r.testUrl.isNotEmpty()) { tgtVc = r.testVc; tgtUrl = r.testUrl }
+            else if (sv.first > own && sv.second.isNotEmpty()) { tgtVc = sv.first; tgtUrl = sv.second }
+            runOnUiThread {
+                if (tgtVc > own && tgtUrl.isNotEmpty()) {
+                    toast("Atualização encontrada (v$tgtVc) — instalando…")
+                    selfLatestVc = maxOf(selfLatestVc, tgtVc); selfUrl = tgtUrl
+                    enqueue(AppEntry("Unlock BYD", packageName, tgtUrl, "", ""))
+                } else {
+                    toast("Você já está na versão mais recente (v$own)")
+                }
+            }
+        }.start()
+    }
+
     /** Menu escondido (5 toques na logo): ADB, diagnósticos e testes — fora da tela inicial. */
     private fun showHiddenToolsMenu() {
         val items = listOf(
+            "⬆ Procurar atualização do Unlock BYD agora" to { checkUpdatesNow() },
             "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
             "Início automático (religar / diagnóstico)" to { showAutostart() },
             "Diagnóstico do cluster" to {
