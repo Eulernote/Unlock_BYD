@@ -98,14 +98,17 @@ class AutostartService : AccessibilityService() {
             return
         }
 
-        val wasOn = sw.isChecked
-        if (!wasOn) {
+        // ATENÇÃO: esta tela é "Desativar inicialização automática" — o switch é INVERTIDO.
+        // Switch LIGADO = início automático DESLIGADO. Para HABILITAR, precisamos DESLIGAR o switch.
+        val switchOn = sw.isChecked      // true = início automático está desabilitado
+        if (switchOn) {
             val target = if (sw.isClickable) sw else clickableAncestor(sw) ?: sw
             val clicked = target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            lastResult = "liguei o início automático do app (clique ${if (clicked) "ok" else "falhou"})"
+            lastResult = "início automático estava DESLIGADO (switch ligado na tela 'desativar'); " +
+                    "desliguei o switch pra habilitar (clique ${if (clicked) "ok" else "falhou"})"
             finish(clicked)
         } else {
-            lastResult = "o botão da linha do app já estava ligado"
+            lastResult = "início automático já habilitado (switch da linha desligado)"
             finish(true)
         }
     }
