@@ -50,6 +50,20 @@
                 android:value="Ícone flutuante para enviar apps ao cluster do veículo" />
         </service>
 
+        <!-- Religa o início automático após updates (abre a tela da BYD e liga o botão, estilo Electro).
+             Ligado em silêncio via ADB/Device Owner. -->
+        <service
+            android:name=".AutostartService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/autostart_accessibility" />
+        </service>
+
         <!-- Carro ligou / app atualizado: checa na hora (ativação, atualização do Unlock BYD e dos apps). -->
         <receiver
             android:name=".BootReceiver"

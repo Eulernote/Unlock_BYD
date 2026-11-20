@@ -65,6 +65,11 @@ object Store {
     }
     fun clearOnboarding(ctx: Context) { prefs(ctx).edit().remove("model").remove("firstname").remove("grupo").remove("ask").apply() }
 
+    // ---- trava FIFA 26 x GTA ----
+    /** Fica true quando o GTA é instalado sem o FIFA 26 antes: o FIFA 26 fica indisponível neste carro. */
+    fun fifaBlocked(ctx: Context): Boolean = prefs(ctx).getBoolean("fifaBlocked", false)
+    fun setFifaBlocked(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("fifaBlocked", v).apply() }
+
     // ---- projeção no cluster ----
     fun clusterEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean("clusterEnabled", false)
     fun setClusterEnabled(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("clusterEnabled", v).apply() }
@@ -123,10 +128,19 @@ object Store {
             val body = "{\"id\":\"$id\",\"nome\":\"$nome\"$extra$dev$ver}"
             val resp = httpPostJson(SERVER + "/api/register", body) ?: return RegResult("error", false, "basico", grupo ?: "byd_simples")
             val o = JSONObject(resp)
-            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), o.optString("grupo", grupo ?: "byd_simples"),
+            val serverGrupo = o.optString("grupo", grupo ?: "byd_simples")
+            // Mantém o grupo local em dia com o painel (a trava do início automático depende dele).
+            if (serverGrupo.isNotBlank()) prefs(ctx).edit().putString("grupo", serverGrupo).apply()
+            RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), serverGrupo,
                 o.optString("cmd", ""), o.optInt("tvc", 0), o.optString("turl", ""))
         } catch (e: Exception) { RegResult("error", false, "basico", "byd_simples") }
     }
+
+    /** O grupo deste carro, como o painel definiu (byd_simples, byd_google, chery, geely). */
+    fun grupo(ctx: Context): String = prefs(ctx).getString("grupo", "byd_simples") ?: "byd_simples"
+
+    /** Início automático é só pra BYD simples. Carros Google/Chery/Geely ficam de fora. */
+    fun autostartAllowed(ctx: Context): Boolean = grupo(ctx) == "byd_simples"
 
     /** Pede ao servidor permissão pra remover o Device Owner. true se autorizado (uso único). */
     fun requestRemoval(ctx: Context): Boolean {
@@ -152,12 +166,20 @@ object Store {
      */
     fun ensureAutostartAfterUpdate(ctx: Context) {
         try {
+            if (!autostartAllowed(ctx)) return   // só BYD simples
+
+            // Garante o serviço de acessibilidade ligado (idempotente): é ele que, uma vez ativo,
+            // religa o início automático sozinho a cada atualização futura (sobrevive ao update).
+            if (!AutostartService.isEnabled(ctx)) AdbShell.enableAccessibilityService(ctx)
+
             val vc = ownVersionCode(ctx)
             if (prefs(ctx).getInt("autostartVc", -1) == vc) return      // já re-habilitado nesta versão
             val tries = prefs(ctx).getInt("autostartTries_$vc", 0)
             if (tries >= 4) return                                       // desiste nesta versão
             prefs(ctx).edit().putInt("autostartTries_$vc", tries + 1).apply()
-            if (AdbShell.enableAutostart(ctx).ok) prefs(ctx).edit().putInt("autostartVc", vc).apply()
+            val shellOk = AdbShell.enableAutostart(ctx).ok               // reforço por whitelist
+            BydAutostart.trySet(ctx, true)                               // reforço por API de hardware
+            if (shellOk) prefs(ctx).edit().putInt("autostartVc", vc).apply()
         } catch (e: Exception) {}
     }
 
@@ -169,7 +191,22 @@ object Store {
         when (cmd) {
             "set-do" -> {
                 val r = AdbShell.setDeviceOwner(ctx)
+                // Só BYD simples: liga a acessibilidade (que religa o início automático).
+                if (r.ok && autostartAllowed(ctx)) AdbShell.enableAccessibilityService(ctx)
                 reportCmdResult(ctx, "set-do", r.ok, if (r.ok) "" else r.reason)
+            }
+            "enable-autostart" -> {
+                if (!autostartAllowed(ctx)) {
+                    reportCmdResult(ctx, "enable-autostart", false, "não aplicável: ${grupo(ctx)} (só BYD simples)")
+                } else {
+                    val a = AdbShell.enableAccessibilityService(ctx)
+                    val s = AdbShell.enableAutostart(ctx)
+                    BydAutostart.trySet(ctx, true)
+                    if (AutostartService.isEnabled(ctx)) AutostartService.requestEnable(ctx)
+                    val ok = a.ok || s.ok
+                    reportCmdResult(ctx, "enable-autostart", ok,
+                        if (ok) "a11y=${a.ok} shell=${s.ok}" else a.reason.ifBlank { s.reason })
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.euler.catalog
 
 import android.content.Context
+import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.view.Display
 
@@ -20,38 +21,170 @@ import android.view.Display
  */
 object ClusterCast {
 
-    // Códigos de abertura: 18 (DiLink antigo) e 16 (DiLink 5). Tentamos os dois.
-    private val SERVICES = listOf("AutoContainer", "auto_container")
-    private val OPEN_CODES = listOf(18, 16)
+    // O serviço real do fornecedor é "AutoContainer" (o "auto_container" não existe no v33).
+    private const val SVC = "AutoContainer"
+    // Sequência de LIGAR a projeção no v33 (DiLink5), confirmada no app de referência:
+    //   16 (prepara) → 35 (cria a superfície fission_bg_xdjaVirtualSurface) → 46 (mostra no painel).
+    // Cada comando com ~1s de intervalo, todos com s16 null.
+    private val ON_SEQUENCE = listOf(16, 35, 46)
+    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → (1,5s) → 18 → 0.
+    private val OFF_SEQUENCE = listOf(46, 18, 0)
 
     data class Result(val ok: Boolean, val detail: String)
 
-    /** Última tarefa jogada no cluster, pra conseguir trazer de volta. */
-    @Volatile var lastTaskId: Int = -1
+    /** Último app jogado no cluster, pra conseguir trazer de volta. */
     @Volatile var lastPkg: String = ""
+    @Volatile var lastComp: String = ""
+    @Volatile var lastDisplayId: Int = -1
+
+    // ---------- perfil do cluster (detecção automática por tamanho) ----------
+
+    data class ClusterProfile(val found: Boolean, val displayId: Int, val w: Int, val h: Int, val density: Int) {
+        val key get() = "${w}x${h}"
+        /** Polegadas são do catálogo do modelo, não medidas (o display virtual reporta dpi sintético). */
+        val label get() = when {
+            !found -> "não detectado"
+            w == 1280 && h == 480 -> "widescreen ~8,8\" ($key)"
+            else -> "$key (perfil desconhecido)"
+        }
+    }
+
+    /** Geometria a aplicar num app, conforme o cluster: densidade + se deve encaixar vídeo em 16:9. */
+    data class AppGeom(val density: Int, val letterbox169: Boolean)
+
+    /** Densidade-base: mira ~480dp no lado curto (paisagem tipo tablet). 480px de altura → 160dpi. */
+    private fun baseDensity(h: Int): Int = (h * 160 / 480).coerceIn(140, 220)
+
+    private fun geomFor(pkg: String, h: Int): AppGeom {
+        val base = baseDensity(h)
+        val p = pkg.lowercase()
+        return when {
+            p.contains("waze") || p.contains("maps") || p.contains("navi") -> AppGeom((base - 10).coerceAtLeast(140), false)
+            p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
+            p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") -> AppGeom(base, true)
+            else -> AppGeom(base, false)
+        }
+    }
+
+    /** Objeto Display do cluster (pra ler a resolução real), ou null. */
+    private fun clusterDisplayObj(ctx: Context): Display? {
+        return try {
+            val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val pres = dm.getDisplays("android.hardware.display.category.PRESENTATION")
+            pres.firstOrNull { it.displayId > 0 && isClusterName(it.name) }
+                ?: pres.firstOrNull { it.displayId > 0 }
+                ?: dm.displays.firstOrNull { it.displayId > 0 && isClusterName(it.name) }
+        } catch (e: Exception) { null }
+    }
+
+    /** Lê o perfil do cluster já criado (resolução + densidade). Chamar depois do openSurface. */
+    private fun readProfile(ctx: Context): ClusterProfile {
+        val d = clusterDisplayObj(ctx) ?: return ClusterProfile(false, -1, 0, 0, 0)
+        val p = Point(); try { d.getRealSize(p) } catch (e: Exception) {}
+        val dens = try {
+            val dmetrics = android.util.DisplayMetrics()
+            @Suppress("DEPRECATION") d.getRealMetrics(dmetrics)
+            dmetrics.densityDpi
+        } catch (e: Exception) { 0 }
+        return ClusterProfile(true, d.displayId, p.x, p.y, dens)
+    }
+
+    /** Aplica a geometria no display do cluster: densidade + letterbox 16:9 (ou limpa overscan). */
+    private fun applyGeom(ctx: Context, id: Int, w: Int, h: Int, g: AppGeom) {
+        AdbShell.run(ctx, "wm density ${g.density} -d $id 2>&1", 8000)
+        if (g.letterbox169 && w > 0 && h > 0) {
+            // Maior retângulo 16:9 dentro de w×h, centralizado → tarjas pretas nas laterais.
+            var vw = w; var vh = w * 9 / 16
+            if (vh > h) { vh = h; vw = h * 16 / 9 }
+            val padX = ((w - vw) / 2).coerceAtLeast(0)
+            val padY = ((h - vh) / 2).coerceAtLeast(0)
+            AdbShell.run(ctx, "wm overscan $padX,$padY,${w - vw - padX},${h - vh - padY} -d $id 2>&1", 8000)
+        } else {
+            AdbShell.run(ctx, "wm overscan reset -d $id 2>&1", 8000)
+        }
+    }
+
+    private fun resetGeom(ctx: Context, id: Int) {
+        if (id < 0) return
+        AdbShell.run(ctx, "wm density reset -d $id 2>&1; wm overscan reset -d $id 2>&1", 8000)
+    }
 
     // ---------- superfície do cluster ----------
 
-    /** Abre a superfície do cluster. Retorna o método que respondeu (ou vazio se nenhum). */
-    private fun openSurface(ctx: Context): String {
-        for (svc in SERVICES) for (code in OPEN_CODES) {
-            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 '' 2>/dev/null", 8000)
-            if (r.ok && !r.output.contains("does not exist", true) && !r.output.contains("not found", true)
-                && !r.output.contains("Service $svc", true)) {
-                // service call devolve "Result: Parcel(...)" quando o serviço existe
-                if (r.output.contains("Result", true) || r.output.contains("Parcel", true) || r.output.isBlank())
-                    return "$svc/$code"
-            }
-        }
-        // Sem serviço: tenta subir o containerservice do fornecedor.
-        AdbShell.run(ctx, "am startservice --user 0 -n com.xdja.containerservice/.AutoDisplayService 2>/dev/null", 8000)
-        AdbShell.run(ctx, "am startservice --user 0 -n com.byd.containerservice/.AutoDisplayService 2>/dev/null", 6000)
-        return ""
+    /** Um comando service call com s16 null. true se a central respondeu Result: Parcel(00000000. */
+    private fun callCode(ctx: Context, code: Int): Boolean {
+        val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 8000)
+        return r.ok && r.output.contains("Parcel(00000000", true)
     }
 
-    /** Fecha/libera a superfície do cluster (código 0). */
+    /**
+     * Decodifica a resposta crua do `service call` (hexdump do Parcel).
+     * Palavra0 = código de exceção (0 = ok); se !=0, palavra1 = tamanho da msg e o resto é UTF-16LE.
+     */
+    private fun decodeReply(raw: String): String {
+        // Coleta as palavras de dados (ignora a coluna de endereço "0x...:").
+        val words = ArrayList<Long>()
+        for (line in raw.lines()) {
+            val colon = line.indexOf(':')
+            val body = if (line.trimStart().startsWith("0x") && colon >= 0) line.substring(colon + 1) else continue
+            val hex = body.substringBefore('\'') // corta a parte ASCII à direita
+            for (tok in Regex("""[0-9a-fA-F]{8}""").findAll(hex)) words.add(tok.value.toLong(16))
+        }
+        if (words.isEmpty()) return raw.replace("\n", " ").take(100)
+        val w0 = words[0].toInt()
+        if (w0 == 0) return "ok (Parcel 0)"
+        val exc = when (w0) {
+            -1 -> "Security"; -2 -> "BadParcelable"; -3 -> "IllegalArgument"; -4 -> "NullPointer"
+            -5 -> "IllegalState"; -6 -> "NetworkOnMainThread"; -7 -> "UnsupportedOperation"; -8 -> "ServiceSpecific"
+            else -> "exc($w0)"
+        }
+        // Mensagem: palavra1 = nº de chars UTF-16; chars a partir da palavra2 (2 por palavra, little-endian).
+        val msg = StringBuilder()
+        if (words.size > 1) {
+            val len = words[1].toInt().coerceIn(0, 200)
+            var idx = 2
+            var count = 0
+            while (count < len && idx < words.size) {
+                val wd = words[idx]
+                val c0 = (wd and 0xFFFF).toInt()
+                val c1 = ((wd shr 16) and 0xFFFF).toInt()
+                if (count < len && c0 in 1..0xFFFF) { msg.append(c0.toChar()); count++ }
+                if (count < len && c1 in 1..0xFFFF) { msg.append(c1.toChar()); count++ }
+                idx++
+            }
+        }
+        return "EXCEÇÃO $exc" + if (msg.isNotBlank()) ": \"${msg.toString().trim()}\"" else ""
+    }
+
+    /** Sonda um opcode isolado e devolve a resposta decodificada (pra firmwares diferentes). */
+    private fun probeCode(ctx: Context, code: Int): String {
+        val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 6000)
+        if (!r.ok && r.output.isBlank()) return "falhou no shell: ${r.reason}"
+        if (r.output.contains("does not exist", true)) return "serviço não existe"
+        return decodeReply(r.output)
+    }
+
+    /**
+     * Liga a projeção do painel: manda a sequência 16 → 35 → 46 (s16 null), ~1s entre cada.
+     * É o 35 que faz o com.xdja.containerservice criar o display fission_bg_xdjaVirtualSurface.
+     * Retorna true se todos os comandos responderam ok.
+     */
+    private fun openSurface(ctx: Context): Boolean {
+        var allOk = true
+        for ((i, code) in ON_SEQUENCE.withIndex()) {
+            if (i > 0) Thread.sleep(1000)
+            if (!callCode(ctx, code)) allOk = false
+        }
+        return allOk
+    }
+
+    /** Desliga a projeção e volta o painel original da BYD (46 → 1,5s → 18 → 0). */
     private fun releaseSurface(ctx: Context) {
-        for (svc in SERVICES) AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 0 s16 '' 2>/dev/null", 6000)
+        callCode(ctx, OFF_SEQUENCE[0])   // 46
+        Thread.sleep(1500)
+        callCode(ctx, OFF_SEQUENCE[1])   // 18
+        Thread.sleep(1000)
+        callCode(ctx, OFF_SEQUENCE[2])   // 0
     }
 
     // ---------- display do cluster ----------
@@ -59,17 +192,44 @@ object ClusterCast {
     /** Nomes que indicam o display do cluster. */
     private fun isClusterName(name: String): Boolean {
         val n = name.lowercase()
-        return n.contains("fission") || n.contains("xdjascreenprojection") || n.contains("cluster") || n.contains("instrument")
+        return n.contains("fission") || n.contains("xdja") || n.contains("virtualsurface") ||
+               n.contains("cluster") || n.contains("instrument")
     }
 
     /** Procura o display do cluster pelo DisplayManager (não precisa de ADB). -1 se não achar. */
     fun clusterDisplayId(ctx: Context): Int {
-        return try {
+        // 1) DisplayManager, categoria PRESENTATION (é onde o cluster virtual do v33 aparece).
+        try {
             val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-            val match = dm.displays.filter { isClusterName(it.name) }
-            // Prefere um display secundário (id > 0).
-            (match.firstOrNull { it.displayId > 0 } ?: match.firstOrNull())?.displayId ?: -1
-        } catch (e: Exception) { -1 }
+            val lists = listOf(
+                dm.getDisplays("android.hardware.display.category.PRESENTATION"),
+                dm.displays
+            )
+            for (arr in lists) {
+                val match = arr.filter { it.displayId > 0 && isClusterName(it.name) }
+                if (match.isNotEmpty()) return match.first().displayId
+            }
+            // Qualquer display secundário na categoria PRESENTATION serve.
+            dm.getDisplays("android.hardware.display.category.PRESENTATION").firstOrNull { it.displayId > 0 }?.let { return it.displayId }
+        } catch (e: Exception) {}
+        // 2) Shell dumpsys: enxerga displays PRIVADOS (o cluster do BYD costuma ser privado).
+        return clusterDisplayIdShell(ctx)
+    }
+
+    /** Lê os displays pelo shell (dumpsys), que vê o display privado do cluster. -1 se não achar. */
+    private fun clusterDisplayIdShell(ctx: Context): Int {
+        // Extrai pares (displayId, nome) do dumpsys display.
+        val r = AdbShell.run(ctx, "dumpsys display | grep -oE 'displayId [0-9]+[^,}]*' | head -40", 8000)
+        val ids = mutableListOf<Pair<Int, String>>()
+        for (line in r.output.lines()) {
+            val m = Regex("""displayId\s+(\d+)(.*)""").find(line) ?: continue
+            val id = m.groupValues[1].toIntOrNull() ?: continue
+            ids.add(id to line.lowercase())
+        }
+        // Preferência: um display cujo nome/linha pareça de cluster.
+        ids.firstOrNull { isClusterName(it.second) }?.let { return it.first }
+        // Senão: o menor display id > 0 (o cluster costuma ser o display 1/2).
+        return ids.map { it.first }.filter { it > 0 }.minOrNull() ?: -1
     }
 
     /** Lista dos displays (id + nome), pro diagnóstico. */
@@ -84,75 +244,193 @@ object ClusterCast {
 
     /** (taskId, "pacote/atividade") do app em primeiro plano, ou null. Ignora o próprio Unlock BYD. */
     private fun foreground(ctx: Context): Pair<Int, String>? {
-        val r = AdbShell.run(ctx, "dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity|ResumedActivity' 2>/dev/null", 8000)
-        val out = r.output
+        // Vários formatos conforme o firmware (DiLink 3/4/5).
+        val cmds = listOf(
+            "dumpsys activity activities | grep -E 'ResumedActivity|topResumedActivity|mResumedActivity'",
+            "dumpsys activity activities | grep -E 'mFocusedApp|ResumedActivity'",
+            "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'",
+            "dumpsys activity top | grep -E 'ACTIVITY '"
+        )
+        for (c in cmds) {
+            val out = AdbShell.run(ctx, "$c 2>/dev/null", 8000).output
+            if (out.isBlank()) continue
+            val comp = Regex("""([a-zA-Z0-9_.]+/[a-zA-Z0-9_.$]+)""").find(out)?.groupValues?.getOrNull(1) ?: continue
+            if (comp.startsWith(ctx.packageName)) continue
+            val taskId = Regex("""\bt(\d+)""").find(out)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
+            return Pair(taskId, comp)
+        }
+        return null
+    }
+
+    // ---------- app/tarefa (fluxo BYD confirmado no ClusterCast webdelta) ----------
+
+    /** Pacote do app em primeiro plano na tela do carro (display 0). Ignora o próprio Unlock BYD. */
+    private fun foregroundPackage(ctx: Context): String? {
+        val out = AdbShell.run(ctx, "dumpsys activity activities 2>/dev/null", 8000).output
         if (out.isBlank()) return null
-        // Linha típica: "...ResumedActivity: ActivityRecord{abc u0 com.google.android.youtube/.UrlActivity t123}"
-        val comp = Regex("""([a-zA-Z0-9_.]+/[a-zA-Z0-9_.$]+)""").find(out)?.groupValues?.getOrNull(1) ?: return null
-        if (comp.startsWith(ctx.packageName)) return null
-        val taskId = Regex("""\bt(\d+)""").find(out)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: -1
-        return Pair(taskId, comp)
+        // Recorta a seção do "Display #0" (onde fica o app da multimídia).
+        val i0 = out.indexOf("Display #0")
+        val region = if (i0 >= 0) {
+            val next = out.indexOf("Display #", i0 + 9)
+            if (next > i0) out.substring(i0, next) else out.substring(i0)
+        } else out
+        // Primeiro mResumedActivity que não seja o nosso app.
+        val rx = Regex("""mResumedActivity:.*?\{[^ ]+ u\d+ ([^/]+)/""")
+        for (m in rx.findAll(region)) {
+            val pkg = m.groupValues[1]
+            if (pkg != ctx.packageName) return pkg
+        }
+        return null
+    }
+
+    /** Resolve a activity pública/launcher do pacote: cmd package resolve-activity --brief. */
+    private fun resolveLaunchComponent(ctx: Context, pkg: String): String? {
+        val out = AdbShell.run(ctx, "cmd package resolve-activity --brief $pkg 2>/dev/null", 8000).output
+        for (line in out.lines()) {
+            val s = line.trim()
+            if (s.contains("/") && !s.contains(" ") && s.startsWith(pkg)) return s
+        }
+        return null
+    }
+
+    /** Move a stack do pacote para o display alvo (am display move-stack). Best-effort. */
+    private fun moveStackToDisplay(ctx: Context, pkg: String, display: Int): Boolean {
+        val out = AdbShell.run(ctx, "am stack list 2>/dev/null", 8000).output
+        if (out.isBlank()) return false
+        val header = Regex("""Stack id=(\d+).*?displayId=(\d+)""")
+        var stackId = -1
+        for (line in out.lines()) {
+            val m = header.find(line)
+            if (m != null) stackId = m.groupValues[1].toIntOrNull() ?: stackId
+            if (line.contains("$pkg/")) { if (stackId >= 0) break }
+        }
+        if (stackId < 0) return false
+        AdbShell.run(ctx, "am display move-stack $stackId $display 2>&1", 8000)
+        return true
     }
 
     // ---------- ações ----------
 
-    /** Joga o app que está na tela pro cluster. Abre a superfície, acha o display e move a tarefa. */
+    /** Joga o app que está na tela pro cluster: cria a superfície, detecta o perfil, ajusta e relança. */
     fun throwToCluster(ctx: Context): Result {
-        val method = openSurface(ctx)
-        // O display do cluster costuma aparecer só depois de abrir a superfície: espera um pouco.
+        val seqOk = openSurface(ctx)
+        // O display só aparece depois do 35: o app de referência procura por até ~6s.
         var id = -1
-        val until = System.currentTimeMillis() + 4000
-        while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(250) }
-        if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (abertura: ${method.ifEmpty { "nenhuma respondeu" }})") }
+        val until = System.currentTimeMillis() + 7000
+        while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(200) }
+        if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (sequência 16→35→46 ${if (seqOk) "respondeu ok" else "falhou em algum passo"})") }
 
-        val fg = foreground(ctx) ?: return Result(false, "não identifiquei o app em primeiro plano")
-        val (taskId, comp) = fg
-        if (taskId > 0) {
-            val r = AdbShell.run(ctx, "am stack move-task $taskId $id true 2>/dev/null || cmd activity move-task $taskId $id true 2>/dev/null", 8000)
-            if (r.ok) { lastTaskId = taskId; lastPkg = comp.substringBefore('/'); return Result(true, "$comp → cluster #$id") }
+        // Perfil do cluster (resolução + densidade reais) — decide a geometria por tamanho.
+        val prof = readProfile(ctx)
+        val pkg = foregroundPackage(ctx) ?: run { releaseSurface(ctx); return Result(false, "nenhum app em foco na tela") }
+        val comp = resolveLaunchComponent(ctx, pkg) ?: run { releaseSurface(ctx); return Result(false, "sem activity pública em $pkg") }
+
+        // Ajusta densidade/letterbox conforme o perfil, ANTES de abrir o app.
+        val geom = geomFor(pkg, if (prof.found && prof.h > 0) prof.h else 480)
+        applyGeom(ctx, id, prof.w, prof.h, geom)
+
+        // Move a stack e relança o launcher no display do cluster (o que de fato renderiza).
+        moveStackToDisplay(ctx, pkg, id)
+        val r = AdbShell.run(ctx, "am start --display $id -n $comp 2>&1", 10000)
+        if (r.output.contains("Error", true) || r.output.contains("Exception", true)) {
+            resetGeom(ctx, id); releaseSurface(ctx)
+            return Result(false, "falhei ao abrir no cluster: ${r.output.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: r.reason}")
         }
-        // Fallback: relança o app no display do cluster.
-        val r2 = AdbShell.run(ctx, "am start --user 0 --display $id --windowingMode 1 -f 0x10000000 --ez cluster true -n $comp 2>/dev/null", 8000)
-        return if (r2.ok) { lastTaskId = taskId; lastPkg = comp.substringBefore('/'); Result(true, "$comp → cluster #$id (relançado)") }
-        else Result(false, "falhei ao mover pro cluster: ${r2.reason.ifBlank { r2.output.take(120) }}")
+        lastPkg = pkg; lastComp = comp; lastDisplayId = id
+        val extra = if (prof.found) " · ${prof.label} · dens ${geom.density}${if (geom.letterbox169) " · 16:9" else ""}" else ""
+        return Result(true, "$pkg → cluster$extra")
     }
 
-    /** Traz de volta pra tela principal o que foi jogado no cluster, e libera a superfície. */
+    /** Traz de volta pra tela principal o que foi jogado no cluster, reseta a geometria e libera. */
     fun bringBack(ctx: Context): Result {
         var moved = false
-        if (lastTaskId > 0) {
-            val r = AdbShell.run(ctx, "am stack move-task $lastTaskId 0 true 2>/dev/null || cmd activity move-task $lastTaskId 0 true 2>/dev/null", 8000)
-            moved = r.ok
-        } else if (lastPkg.isNotEmpty()) {
-            val r = AdbShell.run(ctx, "am start --user 0 --display 0 -f 0x10000000 $lastPkg 2>/dev/null", 8000)
-            moved = r.ok
+        resetGeom(ctx, lastDisplayId)
+        if (lastPkg.isNotEmpty()) {
+            moveStackToDisplay(ctx, lastPkg, 0)
+            val comp = lastComp.ifEmpty { resolveLaunchComponent(ctx, lastPkg) ?: lastPkg }
+            val r = AdbShell.run(ctx, "am start --display 0 -n $comp 2>&1", 10000)
+            moved = !(r.output.contains("Error", true) || r.output.contains("Exception", true))
         }
         releaseSurface(ctx)
-        lastTaskId = -1; lastPkg = ""
+        lastPkg = ""; lastComp = ""; lastDisplayId = -1
         return Result(moved, if (moved) "voltou pra tela do carro" else "liberei o cluster")
     }
 
     /** true se há algo jogado no cluster agora (controle do ícone: jogar x voltar). */
-    fun isCasting(): Boolean = lastTaskId > 0 || lastPkg.isNotEmpty()
+    fun isCasting(): Boolean = lastPkg.isNotEmpty()
 
     // ---------- diagnóstico (primeiro teste no carro) ----------
 
     /** Relatório pra confirmar, no carro, o código de abertura e o display certos. */
     fun diagnose(ctx: Context): String {
         val sb = StringBuilder()
-        sb.append("Displays antes de abrir:\n").append(displaysText(ctx)).append("\n\n")
-        sb.append("Testando abertura da superfície:\n")
-        for (svc in SERVICES) for (code in OPEN_CODES) {
-            val r = AdbShell.run(ctx, "service call $svc 2 i32 1000 i32 $code s16 '' 2>&1", 6000)
-            val resumo = r.output.replace("\n", " ").take(80).ifBlank { r.reason }
-            sb.append("  $svc code $code → ${if (r.ok) "ok" else "falhou"}: $resumo\n")
+
+        // Firmware do carro (ajuda a casar qual variante de cluster usar).
+        sb.append("Firmware / modelo:\n")
+        val fw = AdbShell.run(ctx, "getprop ro.build.display.id; getprop ro.build.version.incremental; getprop ro.product.model; getprop | grep -iE 'dilink|byd.*version' | head -6", 8000)
+        sb.append(fw.output.lines().filter { it.isNotBlank() }.joinToString("\n") { "  $it" }.ifBlank { "  (vazio)" }).append("\n\n")
+
+        // Pacotes de cluster do fornecedor (se não existir, esse firmware não projeta no painel).
+        sb.append("Pacotes de cluster (xdja/container):\n")
+        val pk = AdbShell.run(ctx, "pm list packages 2>/dev/null | grep -iE 'xdja|container|cluster|instrument' | head -10", 8000)
+        sb.append(pk.output.ifBlank { "  (nenhum encontrado)\n" }).append("\n")
+
+        // Sondagem de opcodes: testa cada um e decodifica a resposta (ok x exceção + mensagem).
+        sb.append("Sondagem de opcodes do AutoContainer (decodificada):\n")
+        for (code in listOf(0, 16, 17, 18, 29, 35, 45, 46)) {
+            sb.append("  code $code → ").append(probeCode(ctx, code)).append("\n")
+            Thread.sleep(300)
         }
-        Thread.sleep(800)
-        sb.append("\nDisplays depois de abrir:\n").append(displaysText(ctx)).append("\n")
+        sb.append("\n")
+
+        sb.append("Displays antes de abrir:\n").append(displaysText(ctx)).append("\n\n")
+        sb.append("Ligando a projeção (sequência 16 → 35 → 46, s16 null, ~1s entre cada):\n")
+        for ((i, code) in ON_SEQUENCE.withIndex()) {
+            if (i > 0) Thread.sleep(1000)
+            val r = AdbShell.run(ctx, "service call $SVC 2 i32 1000 i32 $code s16 null 2>&1", 6000)
+            val ok = r.ok && r.output.contains("Parcel(00000000", true)
+            sb.append("  $SVC code $code → ${if (ok) "ok" else decodeReply(r.output)}\n")
+        }
+        Thread.sleep(1500)
+        sb.append("\nDisplays (app) depois de abrir:\n").append(displaysText(ctx)).append("\n")
+        // Categoria PRESENTATION: é onde o cluster virtual do v33 aparece.
+        sb.append("\nDisplays PRESENTATION (onde o cluster do v33 aparece):\n")
+        try {
+            val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val pres = dm.getDisplays("android.hardware.display.category.PRESENTATION")
+            sb.append(if (pres.isEmpty()) "  (nenhum)\n" else pres.joinToString("\n") { "  #${it.displayId} ${it.name}" } + "\n")
+        } catch (e: Exception) { sb.append("  (erro: ${e.message})\n") }
+
+        // Lista crua pelo shell: enxerga displays privados (o cluster).
+        sb.append("\n[shell] dumpsys display (displays lógicos):\n")
+        val dd = AdbShell.run(ctx, "dumpsys display | grep -iE 'Logical Display|displayId|mBaseDisplayInfo|uniqueId|type=|FLAG_PRIVATE|FLAG_PRESENTATION' | head -50", 9000)
+        sb.append(dd.output.ifBlank { "(vazio) ${dd.reason}" }).append("\n")
+        sb.append("\n[shell] SurfaceFlinger:\n")
+        val sf = AdbShell.run(ctx, "dumpsys SurfaceFlinger --display-id 2>/dev/null; dumpsys SurfaceFlinger 2>/dev/null | grep -iE 'Display .*: ' | head", 9000)
+        sb.append(sf.output.ifBlank { "(vazio)" }).append("\n")
+
         val id = clusterDisplayId(ctx)
         sb.append("\nDisplay do cluster detectado: ").append(if (id >= 0) "#$id" else "nenhum").append("\n")
+
+        // Perfil do cluster + geometria que seria aplicada ao app em foco.
+        val prof = readProfile(ctx)
+        sb.append("Perfil do cluster: ").append(prof.label)
+        if (prof.found) sb.append(" · densidade ${prof.density}dpi")
+        sb.append("\n")
+        val pkgNow = foregroundPackage(ctx)
+        if (prof.found && pkgNow != null) {
+            val g = geomFor(pkgNow, prof.h)
+            sb.append("Geometria p/ $pkgNow: densidade ${g.density}${if (g.letterbox169) " · letterbox 16:9" else ""}\n")
+        }
+
+        sb.append("\n[shell] app em primeiro plano (tentativas):\n")
+        val fgRaw = AdbShell.run(ctx, "dumpsys activity activities 2>/dev/null | grep -iE 'ResumedActivity|mFocusedApp|topResumed' | head; echo '--- window ---'; dumpsys window 2>/dev/null | grep -iE 'mCurrentFocus|mFocusedApp' | head", 9000)
+        sb.append(fgRaw.output.ifBlank { "(vazio)" }).append("\n")
         val fg = foreground(ctx)
-        sb.append("App em primeiro plano: ").append(fg?.second ?: "não identificado").append(fg?.let { " (task ${it.first})" } ?: "").append("\n")
+        sb.append("App em primeiro plano (lido): ").append(fg?.second ?: "não identificado").append(fg?.let { " (task ${it.first})" } ?: "").append("\n")
+        val pkg = foregroundPackage(ctx)
+        sb.append("Pacote em foco (display 0): ").append(pkg ?: "não identificado").append("\n")
+        if (pkg != null) sb.append("Launcher resolvido: ").append(resolveLaunchComponent(ctx, pkg) ?: "(sem activity pública)").append("\n")
         releaseSurface(ctx)
         return sb.toString()
     }

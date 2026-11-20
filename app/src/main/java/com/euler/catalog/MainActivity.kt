@@ -65,6 +65,7 @@ class MainActivity : Activity() {
     private var selfUrl = ""
     private var selfAutoTried = false
     @Volatile private var cmdRunning = false
+    @Volatile private var cancelPkg: String? = null   // pacote cujo download o usuário pediu pra cancelar
     private var currentPlan = "basico"
     private var currentGrupo = "byd_simples"
     private var selectedModel: String? = null
@@ -208,6 +209,7 @@ class MainActivity : Activity() {
         if (cmd.isEmpty() || cmdRunning) return
         cmdRunning = true
         if (cmd == "set-do") toast("Setando Device Owner… se o carro pedir, toque em \"Sempre permitir\".")
+        if (cmd == "enable-autostart") toast("Reativando o início automático…")
         Thread {
             try {
                 Store.runCommand(applicationContext, cmd)
@@ -230,7 +232,10 @@ class MainActivity : Activity() {
         if (!force && status == currentStatus) return
         currentStatus = status
         when (status) {
-            "active" -> showCatalog()
+            "active" -> { showCatalog()
+                // Abrir o app uma vez já arma o serviço de acessibilidade (sem popup) pro início
+                // automático se auto-curar nas próximas atualizações.
+                Thread { try { Store.ensureAutostartAfterUpdate(applicationContext) } catch (e: Exception) {} }.start() }
             "revoked" -> { Thread { Store.applyRevoke(applicationContext, wipe) }.start()
                 showLocked("Acesso revogado", "Este catálogo foi desativado para este veículo. Fale com a Unlock BYD para reativar.") }
             "pending" -> showLocked("Aguardando ativação", "Envie o código abaixo para a Unlock BYD liberar este veículo.")
@@ -350,6 +355,8 @@ class MainActivity : Activity() {
             val b = Button(this); b.text = "Tentar de novo"; styleBtn(b, ACCENT, 0xFF04201D.toInt()); b.setOnClickListener { showCatalog() }; container.addView(b); return
         }
         if (entries.isEmpty()) { container.addView(tv("Catálogo vazio.", 14f, MUTED)); return }
+        // Se o GTA já está instalado e o FIFA 26 não, o FIFA 26 fica bloqueado neste carro.
+        if (isInstalled(PKG_GTA) && !isInstalled(PKG_FIFA)) Store.setFifaBlocked(this, true)
 
         val visible = entries.filter { (it.grupos.isEmpty() || it.grupos.contains(currentGrupo)) && planRank(it.plano) <= planRank(currentPlan) }
         container.addView(tv("${grupoLabel(currentGrupo)} · Plano ${planLabel(currentPlan)} · ${visible.size} ${if (visible.size == 1) "app" else "apps"}", 12f, ACCENT, true).apply { setPadding(0, dp(2), 0, dp(10)) })
@@ -367,6 +374,13 @@ class MainActivity : Activity() {
         val clp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); clp.topMargin = dp(8); cl.layoutParams = clp
         cl.setOnClickListener { showClusterSettings() }
         container.addView(cl)
+
+        // Início automático: religar + diagnóstico (opcional, via ADB/acessibilidade).
+        val asb = Button(this); asb.text = "⟳ Início automático"; styleBtn(asb, SURFACE2, TEXT)
+        asb.background = rounded(SURFACE2, 10, 1, BORDER); asb.setTextColor(TEXT)
+        val aslp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); aslp.topMargin = dp(8); asb.layoutParams = aslp
+        asb.setOnClickListener { showAutostart() }
+        container.addView(asb)
 
         for (e in visible) container.addView(appCard(e))
 
@@ -435,9 +449,14 @@ class MainActivity : Activity() {
         val btn = Button(this); btn.text = if (inst) "Reinstalar" else "Instalar"
         styleBtn(btn, if (inst) SURFACE2 else ACCENT, if (inst) TEXT else 0xFF04201D.toInt())
         if (inst) btn.background = rounded(SURFACE2, 9, 1, BORDER)
-        btn.setOnClickListener { enqueue(e) }
+        btn.setOnClickListener { onAppButton(e) }
         buttonViews[e.pkg] = btn
         entriesByPkg[e.pkg] = e
+        // FIFA 26 bloqueado (GTA instalado antes): botão "Indisponível".
+        if (e.pkg == PKG_FIFA && Store.fifaBlocked(this) && !inst) {
+            btn.text = "Indisponível"; styleBtn(btn, SURFACE, MUTED); btn.background = rounded(SURFACE, 9, 1, BORDER); btn.alpha = 0.6f
+            st.text = "Indisponível neste carro"; st.setTextColor(MUTED)
+        }
 
         // Coluna de botões: Instalar/Reinstalar + Desinstalar (só aparece se o app estiver instalado).
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.gravity = Gravity.CENTER_HORIZONTAL
@@ -522,7 +541,12 @@ class MainActivity : Activity() {
     }
 
     // ---------- fila de download/instalação (um por vez) ----------
-    private fun enqueueAll(entries: List<AppEntry>) { entries.filter { !isInstalled(it.pkg) || lockedInstaller.contains(it.pkg) }.forEach { enqueue(it) } }
+    private fun enqueueAll(entries: List<AppEntry>) {
+        // Garante o FIFA 26 antes do GTA na fila (evita o bug de gráficos) e não interrompe o "Instalar todos" com aviso.
+        entries.filter { !isInstalled(it.pkg) || lockedInstaller.contains(it.pkg) }
+            .sortedBy { when (it.pkg) { PKG_FIFA -> 0; PKG_GTA -> 2; else -> 1 } }
+            .forEach { enqueue(it, true) }
+    }
 
     /** Instalador do Android: mostra "Liberado" (Unlock instalado) ou "Travado" (instalador da BYD). */
     private fun checkInstallerState(e: AppEntry) {
@@ -540,15 +564,64 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun enqueue(e: AppEntry) {
+    // Trava específica: instalar o GTA antes do FIFA 26 faz o FIFA abrir com gráficos ruins ("FIFA 14").
+    private val PKG_FIFA = "com.ea.gp.fifaworld"
+    private val PKG_GTA = "com.rockstargames.gtasa"
+    /** FIFA 26 já instalado, instalando agora ou na fila à frente? */
+    private fun fifaPronto(): Boolean =
+        isInstalled(PKG_FIFA) || current?.pkg == PKG_FIFA || installQueue.any { it.pkg == PKG_FIFA }
+
+    private fun avisoGtaFifa(e: AppEntry) {
+        val temFifaNoCatalogo = entriesByPkg.containsKey(PKG_FIFA)
+        val b = android.app.AlertDialog.Builder(this)
+            .setTitle("Instale o FIFA 26 primeiro")
+            .setMessage("Atenção: instalar o GTA antes do FIFA 26 faz o FIFA 26 abrir com gráficos ruins (parece um FIFA 14). O certo é instalar o FIFA 26 primeiro.\n\nComo deseja continuar?")
+        if (temFifaNoCatalogo) b.setPositiveButton("Instalar o FIFA 26 primeiro") { _, _ ->
+            entriesByPkg[PKG_FIFA]?.let { enqueue(it, true) }; enqueue(e, true)
+        }
+        b.setNegativeButton("Continuar assim mesmo") { _, _ -> enqueue(e, true) }
+        b.setNeutralButton("Cancelar", null)
+        b.show()
+    }
+
+    private fun enqueue(e: AppEntry, ignorarAviso: Boolean = false) {
+        // Aviso só no GTA e só quando o FIFA 26 ainda não veio antes.
+        if (!ignorarAviso && e.pkg == PKG_GTA && !fifaPronto()) { avisoGtaFifa(e); return }
         if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) return
         if (Extras.needsStoragePermission(e.extras) && !hasStorage()) {
             // Android 10: precisa de acesso ao armazenamento para gravar em Android/obb e Android/data.
             try { dpm.setPermissionGrantState(admin, packageName, android.Manifest.permission.WRITE_EXTERNAL_STORAGE, DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED) } catch (_: Exception) {}
             if (!hasStorage()) { permWaiting = e; requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE, android.Manifest.permission.READ_EXTERNAL_STORAGE), 77); return }
         }
-        installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED)
+        installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED); btnToCancel(e.pkg)
         if (!installing) processNext()
+    }
+
+    /** Cancela o download em andamento (deste app) ou tira o app da fila. */
+    private fun cancelInstall(e: AppEntry) {
+        when {
+            current?.pkg == e.pkg -> { cancelPkg = e.pkg; setStatus(e.pkg, "Cancelando…", MUTED) }
+            installQueue.any { it.pkg == e.pkg } -> {
+                installQueue.removeAll { it.pkg == e.pkg }
+                setStatus(e.pkg, stateText(e, isInstalled(e.pkg)), MUTED); btnToDefault(e.pkg)
+            }
+        }
+    }
+
+    /** Botão vira "Cancelar" (download/fila em andamento). */
+    private fun btnToCancel(pkg: String) = buttonViews[pkg]?.let { b ->
+        b.text = "Cancelar"; styleBtn(b, SURFACE, RED); b.background = rounded(SURFACE, 9, 1, RED); b.alpha = 1f
+    }
+
+    /** Botão volta ao normal (Instalar/Reinstalar), respeitando a trava do FIFA 26. */
+    private fun btnToDefault(pkg: String) {
+        if (pkg == PKG_FIFA && Store.fifaBlocked(this) && !isInstalled(pkg)) { aplicaTravaFifa(); return }
+        buttonViews[pkg]?.let { b ->
+            val inst = isInstalled(pkg); b.alpha = 1f
+            b.text = if (inst) "Reinstalar" else "Instalar"
+            if (inst) { styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER) }
+            else styleBtn(b, ACCENT, 0xFF04201D.toInt())
+        }
     }
 
     private fun setStatus(pkg: String, text: String, color: Int) {
@@ -564,8 +637,32 @@ class MainActivity : Activity() {
 
     private fun markInstalled(pkg: String) {
         setStatus(pkg, if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) stateText(entriesByPkg[pkg], true) else "Liberado", GREEN)
-        buttonViews[pkg]?.let { b -> b.text = "Reinstalar"; styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER) }
+        buttonViews[pkg]?.let { b -> b.text = "Reinstalar"; styleBtn(b, SURFACE2, TEXT); b.background = rounded(SURFACE2, 9, 1, BORDER); b.alpha = 1f }
         if (entriesByPkg[pkg]?.lockUrl.isNullOrEmpty()) uninstallViews[pkg]?.visibility = View.VISIBLE else lockedInstaller.remove(pkg)
+        // GTA instalado sem o FIFA 26 antes: trava o FIFA 26 neste carro.
+        if (pkg == PKG_GTA && !isInstalled(PKG_FIFA)) { Store.setFifaBlocked(this, true); aplicaTravaFifa() }
+    }
+
+    /** Reflete a trava do FIFA 26 no botão, se o card estiver na tela. */
+    private fun aplicaTravaFifa() {
+        if (Store.fifaBlocked(this) && !isInstalled(PKG_FIFA)) buttonViews[PKG_FIFA]?.let { b ->
+            b.text = "Indisponível"; styleBtn(b, SURFACE, MUTED); b.background = rounded(SURFACE, 9, 1, BORDER); b.alpha = 0.6f
+            setStatus(PKG_FIFA, "Indisponível neste carro", MUTED)
+        }
+    }
+
+    private fun onAppButton(e: AppEntry) {
+        if (e.pkg == PKG_FIFA && Store.fifaBlocked(this) && !isInstalled(PKG_FIFA)) { avisoFifaBloqueado(); return }
+        if (current?.pkg == e.pkg || installQueue.any { it.pkg == e.pkg }) { cancelInstall(e); return }
+        enqueue(e)
+    }
+
+    private fun avisoFifaBloqueado() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("FIFA 26 indisponível")
+            .setMessage("O FIFA 26 é incompatível com o GTA. Antes era oferecida a opção de instalar o FIFA 26 primeiro e depois o GTA, para os dois funcionarem. Como o GTA foi instalado primeiro, não é mais possível baixar o FIFA 26.\n\nQualquer dúvida, entre em contato com a Unlock BYD.")
+            .setPositiveButton("Entendi", null)
+            .show()
     }
 
     private fun processNext() {
@@ -578,22 +675,25 @@ class MainActivity : Activity() {
             val steps = e.extras.size + 1
             val manuals = ArrayList<String>()
             for ((idx, ex) in e.extras.withIndex()) {
+                if (cancelPkg == e.pkg) { finishCancel(e); return@Thread }
                 val tag = "(${idx + 1}/$steps)"
                 runOnUiThread { setStatus(e.pkg, "$tag Baixando ${ex.nome}…", MUTED) }
-                val res = try { Extras.fetch(applicationContext, ex, e.pkg) { txt -> runOnUiThread { setStatus(e.pkg, "$tag $txt", MUTED) } } }
+                val res = try { Extras.fetch(applicationContext, ex, e.pkg, { cancelPkg == e.pkg }) { txt -> runOnUiThread { setStatus(e.pkg, "$tag $txt", MUTED) } } }
                           catch (x: Exception) { Extras.Result(false) }
+                if (cancelPkg == e.pkg) { finishCancel(e); return@Thread }
                 if (!res.ok) { val why = res.erro?.let { ": $it" } ?: ""
-                    runOnUiThread { setStatus(e.pkg, "Falha em ${ex.nome}$why", RED); current = null; processNext() }; return@Thread }
+                    runOnUiThread { setStatus(e.pkg, "Falha em ${ex.nome}$why", RED); btnToDefault(e.pkg); current = null; processNext() }; return@Thread }
                 res.manual?.let { if (!manuals.contains(it)) manuals.add(it) }
             }
             if (manuals.isNotEmpty()) pendingManual[e.pkg] = manuals.joinToString("\n\n— — —\n\n")
             // 2) APK
             val pre = if (steps > 1) "($steps/$steps) " else ""
             val dl = File(cacheDir, e.pkg + ".dl")
-            val ok = try { download(e.url, dl) { pct, bytes -> runOnUiThread {
+            val ok = try { download(e.url, dl, { cancelPkg == e.pkg }) { pct, bytes -> runOnUiThread {
                 setStatus(e.pkg, if (pct >= 0) "Baixando ${pre}APK…  $pct%" else "Baixando ${pre}APK…  ${bytes / 1_000_000} MB", MUTED)
             } } } catch (ex: Exception) { false }
-            if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); current = null; processNext() }; return@Thread }
+            if (cancelPkg == e.pkg) { finishCancel(e); return@Thread }
+            if (!ok || dl.length() == 0L) { runOnUiThread { setStatus(e.pkg, "Falha no download", RED); btnToDefault(e.pkg); current = null; processNext() }; return@Thread }
             val splits = try { extractSplits(dl, e.pkg) } catch (ex: Exception) { null }
             if (splits != null) try { dl.delete() } catch (_: Exception) {}  // .dl já extraído, libera espaço
             runOnUiThread { setStatus(e.pkg, "Instalando…", ACCENT) }
@@ -610,9 +710,19 @@ class MainActivity : Activity() {
         }.start()
     }
 
-    private fun download(urlStr: String, dest: File, onProgress: (Int, Long) -> Unit): Boolean {
+    /** Encerra um download cancelado: limpa o .dl, reseta o botão e segue a fila. */
+    private fun finishCancel(e: AppEntry) {
+        try { File(cacheDir, e.pkg + ".dl").delete() } catch (_: Exception) {}
+        try { cleanTemps() } catch (_: Exception) {}
+        cancelPkg = null; current = null
+        runOnUiThread { setStatus(e.pkg, stateText(e, isInstalled(e.pkg)), MUTED); btnToDefault(e.pkg) }
+        processNext()
+    }
+
+    private fun download(urlStr: String, dest: File, cancel: () -> Boolean = { false }, onProgress: (Int, Long) -> Unit): Boolean {
         var url = urlStr; var redirects = 0
         while (redirects < 6) {
+            if (cancel()) return false
             val c = (URL(url).openConnection() as HttpURLConnection).apply { instanceFollowRedirects = false; connectTimeout = 15000; readTimeout = 300000 }
             val code = c.responseCode
             if (code in 300..399) { val loc = c.getHeaderField("Location"); c.disconnect(); if (loc.isNullOrBlank()) return false; url = loc; redirects++; continue }
@@ -623,6 +733,7 @@ class MainActivity : Activity() {
                     dest.outputStream().use { out ->
                         val buf = ByteArray(64 * 1024); var readTotal = 0L; var lastPct = -1; var lastMark = 0L
                         while (true) {
+                            if (cancel()) { return false }
                             val r = inp.read(buf); if (r < 0) break
                             out.write(buf, 0, r); readTotal += r
                             if (total > 0) { val pct = ((readTotal * 100) / total).toInt(); if (pct != lastPct) { lastPct = pct; onProgress(pct, readTotal) } }
@@ -699,7 +810,7 @@ class MainActivity : Activity() {
         if (requestCode != 77) return
         val e = permWaiting ?: return; permWaiting = null
         // Mesmo se negar, segue: o que não puder ir direto vai para a pasta Download com instruções.
-        installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED)
+        installQueue.addLast(e); setStatus(e.pkg, "Na fila…", MUTED); btnToCancel(e.pkg)
         if (!installing) processNext()
     }
 
@@ -905,10 +1016,46 @@ class MainActivity : Activity() {
         container.addView(back)
     }
 
+    private fun showAutostart() {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Início automático")
+            .setMessage("Religa o início automático do Unlock BYD — necessário para a loja continuar atualizando os apps sozinha depois de cada versão. Abre a tela da BYD e liga o botão do app automaticamente.")
+            .setPositiveButton("Reativar agora") { _, _ ->
+                if (!Store.autostartAllowed(applicationContext)) { toast("Início automático é só para BYD simples (este carro é ${Store.grupo(applicationContext)})"); return@setPositiveButton }
+                toast("Reativando…")
+                Thread {
+                    val a = AdbShell.enableAccessibilityService(applicationContext)
+                    val s = AdbShell.enableAutostart(applicationContext)
+                    BydAutostart.trySet(applicationContext, true)
+                    if (AutostartService.isEnabled(applicationContext)) AutostartService.requestEnable(applicationContext)
+                    runOnUiThread { toast(if (a.ok || s.ok) "Comando enviado" else "Falha: ${a.reason.ifBlank { s.reason }}") }
+                }.start()
+            }
+            .setNeutralButton("Diagnóstico") { _, _ ->
+                toast("Lendo estado…")
+                Thread {
+                    val sb = StringBuilder()
+                    sb.append("Serviço de acessibilidade ligado: ")
+                      .append(if (AutostartService.isEnabled(applicationContext)) "sim" else "não").append("\n")
+                    sb.append("Última ação do serviço: ").append(AutostartService.lastResult).append("\n\n")
+                    sb.append("Estado do início automático:\n").append(AdbShell.autostartState(applicationContext)).append("\n")
+                    if (AutostartService.lastDump.isNotBlank())
+                        sb.append("\nTextos lidos na tela de início automático:\n").append(AutostartService.lastDump)
+                    runOnUiThread { showDiagnostic(sb.toString()) }
+                }.start()
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
+    }
+
     private fun showDiagnostic(text: String) {
-        val tvv = TextView(this); tvv.text = text; tvv.setTextColor(TEXT); tvv.textSize = 12f
-        tvv.setTypeface(Typeface.MONOSPACE); tvv.setPadding(dp(16), dp(16), dp(16), dp(16)); tvv.setTextIsSelectable(true)
-        val sv = ScrollView(this); sv.addView(tvv)
+        // Fundo branco e texto preto vibrante e em negrito, pra ler/fotografar sem precisar selecionar.
+        val tvv = TextView(this); tvv.text = text
+        tvv.setTextColor(0xFF000000.toInt()); tvv.textSize = 13f
+        tvv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+        tvv.setBackgroundColor(0xFFFFFFFF.toInt())
+        tvv.setPadding(dp(16), dp(16), dp(16), dp(16)); tvv.setTextIsSelectable(true)
+        val sv = ScrollView(this); sv.setBackgroundColor(0xFFFFFFFF.toInt()); sv.addView(tvv)
         android.app.AlertDialog.Builder(this).setTitle("Diagnóstico do cluster").setView(sv)
             .setPositiveButton("Fechar", null).show()
     }

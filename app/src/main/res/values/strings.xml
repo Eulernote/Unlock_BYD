@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Unlock BYD</string>
+    <string name="a11y_autostart_desc">Mantém o início automático do Unlock BYD ligado após as atualizações, para a loja continuar atualizando os apps sozinha.</string>
 </resources>

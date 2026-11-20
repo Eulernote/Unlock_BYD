@@ -102,11 +102,54 @@ object AdbShell {
             "appops set $pkg WAKE_LOCK allow 2>/dev/null",
             "dumpsys deviceidle whitelist +$pkg 2>/dev/null",
             "content call --uri content://com.byd.appstartup/whitelist --method add --arg '$pkg' 2>/dev/null",
-            "CUR=\$(settings get secure ssc_whitelist); [ \"\$CUR\" = null ] && CUR=; case \",\$CUR,\" in *,$pkg,*) ;; *) settings put secure ssc_whitelist \"\${CUR:+\$CUR,}$pkg\" ;; esac 2>/dev/null",
+            sscAppend("secure", pkg),
+            sscAppend("global", pkg),
             "echo UBYD_OK"
         )
         val r = run(ctx, cmds.joinToString(" ; "), 20000)
         return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
+    }
+
+    /** Acrescenta o pacote à ssc_whitelist (secure/global) sem duplicar, tratando "null". */
+    private fun sscAppend(ns: String, pkg: String): String =
+        "CUR=\$(settings get $ns ssc_whitelist); [ \"\$CUR\" = null ] && CUR=; case \",\$CUR,\" in *,$pkg,*) ;; *) settings put $ns ssc_whitelist \"\${CUR:+\$CUR,}$pkg\" ;; esac 2>/dev/null"
+
+    /**
+     * Liga, em silêncio, o serviço de acessibilidade do Unlock BYD (usado pra religar o início
+     * automático após updates). Só funciona com shell (WRITE_SECURE_SETTINGS). Idempotente.
+     */
+    fun enableAccessibilityService(ctx: Context): Result {
+        val comp = ComponentName(ctx, AutostartService::class.java).flattenToString() // com.euler.catalog/com.euler.catalog.AutostartService
+        val cmds = listOf(
+            "CUR=\$(settings get secure enabled_accessibility_services); [ \"\$CUR\" = null ] && CUR=; case \":\$CUR:\" in *:$comp:*) ;; *) settings put secure enabled_accessibility_services \"\${CUR:+\$CUR:}$comp\" ;; esac 2>/dev/null",
+            "settings put secure accessibility_enabled 1 2>/dev/null",
+            "echo UBYD_OK"
+        )
+        val r = run(ctx, cmds.joinToString(" ; "), 15000)
+        return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
+    }
+
+    /** Abre a tela de início automático da BYD pelo shell (fallback quando o Context não consegue). */
+    fun openAutostartPage(ctx: Context): Result {
+        val cmds = listOf(
+            "am start -n com.byd.appstartmanagement/.frame.AppStartManagement 2>/dev/null",
+            "am start -n com.byd.appstartmanagement/.AppStartManagement 2>/dev/null",
+            "am start -n com.byd.setting/.activity.AutoStartActivity 2>/dev/null",
+            "echo UBYD_OK"
+        )
+        return run(ctx, cmds.joinToString(" ; "), 12000)
+    }
+
+    /** Lê o estado atual do início automático (pra diagnóstico). */
+    fun autostartState(ctx: Context): String {
+        val pkg = ctx.packageName
+        val cmd = "echo 'appops AUTO_START:'; cmd appops get $pkg AUTO_START 2>&1; " +
+                  "echo 'appops BOOT_COMPLETED:'; cmd appops get $pkg BOOT_COMPLETED 2>&1; " +
+                  "echo 'ssc_whitelist(secure):'; settings get secure ssc_whitelist 2>&1; " +
+                  "echo 'ssc_whitelist(global):'; settings get global ssc_whitelist 2>&1; " +
+                  "echo 'byd whitelist:'; content query --uri content://com.byd.appstartup/whitelist 2>&1 | head -40; " +
+                  "echo 'a11y enabled:'; settings get secure enabled_accessibility_services 2>&1"
+        return run(ctx, cmd, 15000).output
     }
 
     /** Concede a permissão de "sobrepor outras telas" a este app, silenciosamente, via ADB. */
