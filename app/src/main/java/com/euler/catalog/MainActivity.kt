@@ -473,6 +473,19 @@ class MainActivity : Activity() {
         }
         container.addView(ext)
 
+        // Extrair os APKs do cluster (containerservice + clusterdebug) pra análise.
+        val extCl = Button(this); extCl.text = "⬇ Extrair APKs do cluster · teste"; styleBtn(extCl, SURFACE2, TEXT)
+        extCl.background = rounded(SURFACE2, 10, 1, BORDER); extCl.setTextColor(TEXT)
+        val extCllp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); extCllp.topMargin = dp(8); extCl.layoutParams = extCllp
+        extCl.setOnClickListener {
+            toast("Extraindo os APKs do cluster…")
+            Thread {
+                val r = AdbShell.extractClusterApks(applicationContext)
+                runOnUiThread { showDiagnostic("Extração dos APKs do cluster\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } }) }
+            }.start()
+        }
+        container.addView(extCl)
+
         for (e in visible) container.addView(appCard(e))
 
         if (dpm.isDeviceOwnerApp(packageName)) {

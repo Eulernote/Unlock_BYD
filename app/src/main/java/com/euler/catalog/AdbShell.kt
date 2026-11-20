@@ -187,6 +187,21 @@ object AdbShell {
         return run(ctx, cmd, 25000)
     }
 
+    /** Copia os APKs dos apps do cluster (containerservice + clusterdebug) para /sdcard/Download. */
+    fun extractClusterApks(ctx: Context): Result {
+        val cmd =
+            "mkdir -p /sdcard/Download 2>/dev/null; " +
+            "for PKG in com.xdja.containerservice com.byd.clusterdebug; do " +
+            "P=\$(pm path \"\$PKG\" 2>/dev/null | sed 's/package://' | head -1); " +
+            "if [ -z \"\$P\" ]; then echo \"\$PKG: NAO INSTALADO\"; else " +
+            "i=0; for p in \$(pm path \"\$PKG\" | sed 's/package://'); do " +
+            "if [ \$i -eq 0 ]; then cp \"\$p\" \"/sdcard/Download/cluster_\$PKG.apk\" 2>&1; " +
+            "else cp \"\$p\" \"/sdcard/Download/cluster_\${PKG}_\$i.apk\" 2>&1; fi; i=\$((i+1)); done; " +
+            "echo \"\$PKG: ok\"; fi; done; " +
+            "echo 'Arquivos em Download:'; ls -la /sdcard/Download/cluster_* 2>&1"
+        return run(ctx, cmd, 30000)
+    }
+
     private fun parseDpmError(out: String): String = when {
         out.contains("already", true) && out.contains("owner", true) -> "já existe um owner/admin definido"
         out.contains("account", true) -> "há conta(s) cadastradas no carro — remova antes"
