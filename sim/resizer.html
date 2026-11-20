@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redimensionar Waze / YouTube no cluster</title>
+<style>
+  :root{--teal:#19d3b5;--txt:#eaf2f5;--muted:#8fa0ad;--line:#1c2730;--blue:#3ea6ff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0a0d11;color:var(--txt);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;padding:14px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:15px;margin-bottom:2px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:12px}
+  .tabs{display:flex;gap:8px;margin-bottom:10px}
+  .tab{background:#1b232c;border:1px solid var(--line);color:var(--txt);padding:8px 16px;border-radius:8px;font-size:13px;cursor:pointer}
+  .tab.on{background:var(--teal);border-color:var(--teal);color:#042019;font-weight:700}
+
+  .frame{background:#000;border:1px solid var(--line);border-radius:14px;padding:8px}
+  .cluster{position:relative;width:100%;aspect-ratio:1280/480;border-radius:10px;overflow:hidden;background:#000;touch-action:none;user-select:none}
+  .tag{position:absolute;top:3px;left:7px;font-size:10px;color:#4a5a68;z-index:8}
+
+  /* BYD bars reference */
+  .byd{position:absolute;left:0;right:0;z-index:6;display:flex;align-items:center;color:#aeb9c4;font-size:1.05vmin;pointer-events:none}
+  .byd.t{top:0;height:15%;justify-content:center;gap:2.5%;background:linear-gradient(#000a,transparent)}
+  .byd.b{bottom:0;height:19%;justify-content:space-between;padding:0 2.5%;background:linear-gradient(transparent,#000a)}
+  .byd .g{color:#36d07b;font-weight:700}
+  .byd .bar{flex:1;height:4px;margin:0 2%;border-radius:3px;background:linear-gradient(90deg,#36d07b 0 42%,#2a3a47 42%)}
+  .zone{position:absolute;left:0;right:0;z-index:5;border:1px dashed rgba(255,70,70,.28);pointer-events:none}
+  .zone.t{top:0;height:15%} .zone.b{bottom:0;height:19%}
+
+  /* content rect (the app viewport) */
+  .rect{position:absolute;z-index:7;border:2px solid var(--teal);box-shadow:0 0 0 9999px rgba(0,0,0,.45);cursor:move;overflow:hidden}
+  .rect .content{position:absolute;inset:0}
+  .wazecar{position:absolute;left:50%;top:62%;transform:translate(-50%,-50%);z-index:2}
+  .ytbox{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#0a0d11;color:#54707f;font-weight:800;letter-spacing:3px;font-size:1.6vmin}
+  .hdl{position:absolute;width:16px;height:16px;background:var(--teal);border:2px solid #04211b;border-radius:50%;z-index:9}
+  .hdl.nw{left:-8px;top:-8px;cursor:nwse-resize}.hdl.ne{right:-8px;top:-8px;cursor:nesw-resize}
+  .hdl.sw{left:-8px;bottom:-8px;cursor:nesw-resize}.hdl.se{right:-8px;bottom:-8px;cursor:nwse-resize}
+  .hdl.n{left:50%;top:-8px;margin-left:-8px;cursor:ns-resize}.hdl.s{left:50%;bottom:-8px;margin-left:-8px;cursor:ns-resize}
+  .hdl.w{top:50%;left:-8px;margin-top:-8px;cursor:ew-resize}.hdl.e{top:50%;right:-8px;margin-top:-8px;cursor:ew-resize}
+
+  .out{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px}
+  .card{background:#12181f;border:1px solid var(--line);border-radius:12px;padding:12px 14px;flex:1;min-width:250px}
+  .card h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
+  .nums{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.9}
+  .nums b{color:var(--teal)}
+  .cmd{margin-top:8px;background:#0a0d11;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;color:var(--blue);word-break:break-all}
+  .seg{display:flex;flex-wrap:wrap;gap:6px}
+  button.b{background:#1b232c;border:1px solid var(--line);color:var(--txt);padding:7px 11px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  .tg{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:7px;cursor:pointer}
+  .tg input{width:15px;height:15px;accent-color:var(--teal)}
+  .foot{color:var(--muted);font-size:11.5px;margin-top:10px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Redimensionar no cluster <span style="color:var(--teal);font-size:12px">· 1280 × 480</span></h1>
+  <p class="sub">Arraste e estique a área verde até o app ficar do jeito que você quer. Os números embaixo são o que eu ponho no código. O carro do Waze está marcado pra você ver se fica visível.</p>
+
+  <div class="tabs">
+    <div class="tab on" data-app="waze">Waze</div>
+    <div class="tab" data-app="youtube">YouTube</div>
+  </div>
+
+  <div class="frame">
+    <div class="cluster" id="cluster">
+      <div class="tag">1280 × 480</div>
+      <div class="zone t" id="zt"></div><div class="zone b" id="zb"></div>
+
+      <div class="rect" id="rect">
+        <div class="content" id="content"></div>
+        <div class="hdl nw" data-h="nw"></div><div class="hdl n" data-h="n"></div><div class="hdl ne" data-h="ne"></div>
+        <div class="hdl e" data-h="e"></div><div class="hdl se" data-h="se"></div><div class="hdl s" data-h="s"></div>
+        <div class="hdl sw" data-h="sw"></div><div class="hdl w" data-h="w"></div>
+      </div>
+
+      <div class="byd t" id="bt"><span>15:56</span><span class="g">Standard</span><span class="g">P</span><span>29°C</span><span>AL</span></div>
+      <div class="byd b" id="bb"><span>0 kW</span><span>🔋42%</span><div class="bar"></div><span>161 km</span><span>TRIP A 256,5</span></div>
+    </div>
+  </div>
+
+  <div class="out">
+    <div class="card">
+      <h3>Medidas p/ <span id="appName">Waze</span></h3>
+      <div class="nums" id="nums"></div>
+      <div class="cmd" id="cmd"></div>
+      <p class="foot">É só me mandar foto desta tela ou os números. "margem" = quanto reservar de cada lado.</p>
+    </div>
+    <div class="card">
+      <h3>Atalhos</h3>
+      <div class="seg">
+        <button class="b" data-p="full">Tela cheia</button>
+        <button class="b" data-p="center">Faixa central (entre as barras)</button>
+        <button class="b" data-p="reset">Resetar</button>
+      </div>
+      <h3 style="margin-top:14px">Referência</h3>
+      <label class="tg"><input type="checkbox" id="showByd" checked> Mostrar barras do BYD</label>
+      <label class="tg"><input type="checkbox" id="showZone" checked> Marcar zona das barras</label>
+      <p class="foot">O "preto" fora da área verde fica embaixo das barras do BYD — não vira tarja feia.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  var W=1280,H=480;
+  var cluster=document.getElementById('cluster'), rectEl=document.getElementById('rect'), content=document.getElementById('content');
+  var state={
+    waze:{x:0,y:72,w:1280,h:316},      // default: minha estimativa (margem 72/92)
+    youtube:{x:0,y:0,w:1280,h:480}      // vídeo: tela cheia
+  };
+  var app='waze';
+
+  function carSvg(){return '<svg class="wazecar" width="34" height="34" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#3ea6ff" opacity=".28"/><path d="M12 4 L7 19 L12 15 L17 19 Z" fill="#1a73e8" stroke="#fff" stroke-width="1.3"/></svg>';}
+  function mapSvg(){return '<svg width="100%" height="100%" viewBox="0 0 400 200" preserveAspectRatio="xMidYMid slice" style="position:absolute;inset:0"><rect width="400" height="200" fill="#c9d2da"/><g stroke="#aeb9c4" stroke-width="7" fill="none"><path d="M-10 50 L410 30"/><path d="M-10 120 L410 100"/><path d="M60 -10 L30 210"/><path d="M200 -10 L210 210"/><path d="M320 -10 L340 210"/></g><g stroke="#dfe6ec" stroke-width="16" fill="none"><path d="M-10 90 L410 70"/></g><rect x="250" y="40" width="80" height="55" fill="#bfe6c4" opacity=".7"/><path d="M210 210 L208 120 L150 95" stroke="#6b3df2" stroke-width="12" fill="none" stroke-linecap="round"/></svg>';}
+
+  function renderContent(){
+    if(app==='waze'){ content.innerHTML=mapSvg()+carSvg(); }
+    else { content.innerHTML='<div class="ytbox">▶ YOUTUBE</div>'; }
+  }
+
+  function clamp(r){
+    if(r.w<120)r.w=120; if(r.h<60)r.h=60;
+    if(r.x<0)r.x=0; if(r.y<0)r.y=0;
+    if(r.x+r.w>W)r.x=W-r.w; if(r.y+r.h>H)r.h=Math.min(r.h,H-r.y);
+    if(r.x+r.w>W)r.w=W-r.x; if(r.y+r.h>H)r.h=H-r.y;
+  }
+  function draw(){
+    var r=state[app]; clamp(r);
+    rectEl.style.left=(r.x/W*100)+'%'; rectEl.style.top=(r.y/H*100)+'%';
+    rectEl.style.width=(r.w/W*100)+'%'; rectEl.style.height=(r.h/H*100)+'%';
+    var L=Math.round(r.x),T=Math.round(r.y),R=Math.round(W-r.x-r.w),B=Math.round(H-r.y-r.h);
+    document.getElementById('nums').innerHTML=
+      'margem topo: <b>'+T+'</b> px<br>margem base: <b>'+B+'</b> px<br>margem esq/dir: <b>'+L+'</b> / <b>'+R+'</b> px<br>área do app: <b>'+Math.round(r.w)+' × '+Math.round(r.h)+'</b>';
+    document.getElementById('cmd').textContent='wm overscan '+L+','+T+','+R+','+B;
+    document.getElementById('appName').textContent = app==='waze'?'Waze':'YouTube';
+  }
+
+  function px(e){var b=cluster.getBoundingClientRect();return {x:(e.clientX-b.left)/b.width*W, y:(e.clientY-b.top)/b.height*H};}
+
+  // move
+  rectEl.addEventListener('pointerdown',function(e){
+    if(e.target.classList.contains('hdl'))return;
+    e.preventDefault(); rectEl.setPointerCapture(e.pointerId);
+    var start=px(e), r=state[app], ox=r.x, oy=r.y;
+    function mv(ev){var p=px(ev); r.x=ox+(p.x-start.x); r.y=oy+(p.y-start.y); draw();}
+    function up(){rectEl.removeEventListener('pointermove',mv);rectEl.removeEventListener('pointerup',up);}
+    rectEl.addEventListener('pointermove',mv); rectEl.addEventListener('pointerup',up);
+  });
+  // resize
+  rectEl.querySelectorAll('.hdl').forEach(function(h){
+    h.addEventListener('pointerdown',function(e){
+      e.preventDefault(); e.stopPropagation(); h.setPointerCapture(e.pointerId);
+      var dir=h.dataset.h, start=px(e), r=state[app], o={x:r.x,y:r.y,w:r.w,h:r.h};
+      function mv(ev){var p=px(ev),dx=p.x-start.x,dy=p.y-start.y;
+        if(dir.includes('e'))r.w=o.w+dx;
+        if(dir.includes('s'))r.h=o.h+dy;
+        if(dir.includes('w')){r.x=o.x+dx;r.w=o.w-dx;}
+        if(dir.includes('n')){r.y=o.y+dy;r.h=o.h-dy;}
+        draw();}
+      function up(){h.removeEventListener('pointermove',mv);h.removeEventListener('pointerup',up);}
+      h.addEventListener('pointermove',mv); h.addEventListener('pointerup',up);
+    });
+  });
+
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.addEventListener('click',function(){app=t.dataset.app;
+      document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+      renderContent(); draw();});
+  });
+  document.querySelector('.seg').addEventListener('click',function(e){
+    var b=e.target.closest('.b'); if(!b)return; var p=b.dataset.p, r=state[app];
+    if(p==='full'){r.x=0;r.y=0;r.w=W;r.h=H;}
+    if(p==='center'){r.x=0;r.y=Math.round(H*0.15);r.w=W;r.h=Math.round(H*0.66);}
+    if(p==='reset'){var d=(app==='waze')?{x:0,y:72,w:1280,h:316}:{x:0,y:0,w:1280,h:480};Object.assign(r,d);}
+    draw();
+  });
+  document.getElementById('showByd').addEventListener('change',function(e){var v=e.target.checked?'flex':'none';document.getElementById('bt').style.display=v;document.getElementById('bb').style.display=v;});
+  document.getElementById('showZone').addEventListener('change',function(e){var v=e.target.checked?'block':'none';document.getElementById('zt').style.display=v;document.getElementById('zb').style.display=v;});
+
+  renderContent(); draw();
+})();
+</script>
+</body>
+</html>

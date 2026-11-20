@@ -1120,18 +1120,6 @@ class MainActivity : Activity() {
             }
             card.addView(half)
 
-            // Recuperar: reinicia o serviço do cluster quando ele trava e para de criar a 2ª tela.
-            val rst = Button(this); rst.text = "⟳ Reiniciar serviço do cluster · teste"; styleBtn(rst, SURFACE2, TEXT); rst.background = rounded(SURFACE2, 9, 1, BORDER)
-            val rstlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); rstlp.topMargin = dp(18); rst.layoutParams = rstlp
-            rst.setOnClickListener {
-                toast("Reiniciando o serviço do cluster…")
-                Thread {
-                    val r = AdbShell.resetClusterService(applicationContext)
-                    runOnUiThread { showDiagnostic("Reiniciar serviço do cluster\n\n" + r.output.ifBlank { r.reason.ifBlank { "sem saída" } } + "\n\nAgora tente projetar de novo.") }
-                }.start()
-            }
-            card.addView(rst)
-
             // Diagnóstico
             val diag = Button(this); diag.text = "Diagnóstico do cluster"; styleBtn(diag, SURFACE2, TEXT); diag.background = rounded(SURFACE2, 9, 1, BORDER)
             val dlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); dlp.topMargin = dp(18); diag.layoutParams = dlp

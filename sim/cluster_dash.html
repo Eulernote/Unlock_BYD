@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel do Cluster — Unlock BYD</title>
+<style>
+  :root{
+    --teal:#19d3b5; --teal2:#0fa892; --blue:#3ea6ff; --ink:#05080c;
+    --txt:#eaf2f5; --muted:#8fa0ad; --warn:#ffb020; --line:#1c2730;
+    --byd:#223040;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0a0d11;color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;padding:14px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:15px;margin-bottom:2px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:12px}
+
+  /* ---- cluster canvas 1280x480 ---- */
+  .frame{background:#000;border:1px solid var(--line);border-radius:14px;padding:8px}
+  .cluster{position:relative;width:100%;aspect-ratio:1280/480;border-radius:10px;overflow:hidden;
+    background:radial-gradient(130% 120% at 50% 15%,#0e1620 0%,#05080c 70%)}
+
+  /* BYD safe zones (barras que NÃO podemos remover) */
+  .bydtop,.bydbot{position:absolute;left:0;right:0;display:flex;align-items:center;
+    color:#aeb9c4;font-size:1.05vmin;z-index:5;padding:0 2.2%}
+  .bydtop{top:0;height:14.6%;justify-content:center;gap:2.5%}
+  .bydbot{bottom:0;height:18%;justify-content:space-between}
+  .bydtop .g{color:#36d07b;font-weight:700}
+  .bydbot .bar{flex:1;height:5px;margin:0 2%;border-radius:3px;
+    background:linear-gradient(90deg,#36d07b 0 42%,#2a3a47 42%)}
+  .tag{position:absolute;top:2px;left:6px;font-size:9px;color:#4a5a68;z-index:6;letter-spacing:.5px}
+  .safe{position:absolute;left:0;right:0;border:1px dashed rgba(255,80,80,.18);z-index:4;pointer-events:none}
+  .safe.t{top:0;height:14.6%} .safe.b{bottom:0;height:18%}
+
+  /* OUR dashboard — faixa central */
+  .ours{position:absolute;left:0;right:0;top:14.6%;bottom:18%;display:flex;align-items:stretch;z-index:3}
+  .col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.3vmin}
+  .col.side{flex:0 0 27%}
+  .ring{position:relative;width:19vmin;height:19vmin;max-width:150px;max-height:150px}
+  .ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+  .ring .ctr{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring .ctr b{font-size:4.2vmin;font-weight:800;line-height:1}
+  .ring .ctr small{font-size:1.3vmin;color:var(--muted);letter-spacing:.12em;margin-top:.3vmin}
+  .lab{font-size:1.25vmin;color:var(--muted);letter-spacing:.14em;text-transform:uppercase}
+
+  .speed{display:flex;flex-direction:column;align-items:center}
+  .speed .v{font-size:12vmin;font-weight:800;line-height:.9;letter-spacing:-2px;
+    background:linear-gradient(180deg,#fff,#b9cdd6);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .speed .u{font-size:1.6vmin;color:var(--muted);letter-spacing:.35em;margin-top:.4vmin}
+  .speed .mode{margin-top:1vmin;font-size:1.3vmin;color:var(--teal);border:1px solid var(--teal2);
+    border-radius:20px;padding:.5vmin 1.6vmin;letter-spacing:.14em;text-transform:uppercase}
+
+  .pwr{width:86%}
+  .pwr .row{display:flex;justify-content:space-between;font-size:1.3vmin;color:var(--muted);margin-bottom:.5vmin}
+  .pwr .val{color:var(--txt);font-weight:700;font-size:1.8vmin}
+  .pwr .track{height:.9vmin;background:#14202a;border-radius:6px;overflow:hidden}
+  .pwr .fill{height:100%;background:linear-gradient(90deg,var(--teal2),var(--teal));width:0%}
+  .pwr .fill.regen{background:linear-gradient(90deg,#2f6bff,#4aa0ff)}
+
+  .map{width:92%;height:70%;border-radius:10px;overflow:hidden;border:1px solid #11202b;position:relative}
+  .map svg{width:100%;height:100%}
+  .brand{position:absolute;bottom:.6vmin;right:1vmin;font-size:1vmin;color:var(--teal);letter-spacing:.1em;opacity:.8}
+
+  /* controls */
+  .ctrls{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px}
+  .card{background:#12181f;border:1px solid var(--line);border-radius:12px;padding:12px 14px;flex:1;min-width:230px}
+  .card h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
+  .seg{display:flex;flex-wrap:wrap;gap:6px}
+  button.b{background:#1b232c;border:1px solid var(--line);color:var(--txt);padding:7px 11px;border-radius:8px;font-size:12.5px;cursor:pointer}
+  button.b.on{background:var(--teal);border-color:var(--teal);color:#042019;font-weight:700}
+  .tg{display:flex;align-items:center;gap:8px;font-size:13px;margin-bottom:7px;cursor:pointer}
+  .tg input{width:15px;height:15px;accent-color:var(--teal)}
+  .foot{color:var(--muted);font-size:11.5px;margin-top:12px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Painel do Cluster — Unlock BYD <span style="color:var(--teal);font-size:12px">· protótipo</span></h1>
+  <p class="sub">Nosso dashboard na faixa central (1280×480), desenhado pra conviver com as barras do BYD — igual o EVSound faz. Dados de exemplo.</p>
+
+  <div class="frame">
+    <div class="cluster" id="cluster">
+      <div class="tag">1280 × 480</div>
+
+      <!-- BYD (não removível) -->
+      <div class="bydtop" id="bydtop">
+        <span>15:56</span><span class="g">Standard</span><span class="g">P</span><span>29°C</span><span>AL</span>
+      </div>
+      <div class="bydbot" id="bydbot">
+        <span>0 <small>kW</small></span><span>🔋 42%</span><div class="bar"></div><span>161 km</span><span>TRIP A 256,5</span>
+      </div>
+      <div class="safe t" id="safet"></div><div class="safe b" id="safeb"></div>
+
+      <!-- NOSSO -->
+      <div class="ours">
+        <!-- esquerda: potência / eficiência -->
+        <div class="col side" id="colL">
+          <div class="ring">
+            <svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="42" fill="none" stroke="#14202a" stroke-width="9"/>
+              <circle id="pwrArc" cx="50" cy="50" r="42" fill="none" stroke="url(#gt)" stroke-width="9" stroke-linecap="round"
+                stroke-dasharray="264" stroke-dashoffset="198"/>
+              <defs><linearGradient id="gt" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#0fa892"/><stop offset="1" stop-color="#19d3b5"/></linearGradient></defs></svg>
+            <div class="ctr"><b id="pwrV">0</b><small>kW</small></div>
+          </div>
+          <div class="lab">Potência</div>
+          <div class="pwr" style="margin-top:1vmin">
+            <div class="row"><span>Eficiência</span><span class="val" id="effV">—</span></div>
+            <div class="track"><div class="fill" id="effBar" style="width:60%"></div></div>
+          </div>
+        </div>
+
+        <!-- centro: velocidade -->
+        <div class="col">
+          <div class="speed">
+            <div class="v" id="spd">0</div>
+            <div class="u">KM / H</div>
+            <div class="mode" id="mode">Normal</div>
+          </div>
+        </div>
+
+        <!-- direita: mini-mapa -->
+        <div class="col side" id="colR">
+          <div class="map">
+            <svg viewBox="0 0 200 120" preserveAspectRatio="xMidYMid slice">
+              <rect width="200" height="120" fill="#0c141b"/>
+              <g stroke="#1b2a36" stroke-width="5" fill="none">
+                <path d="M-10 30 L210 18"/><path d="M-10 70 L210 60"/><path d="M20 -5 L10 130"/><path d="M120 -5 L130 130"/></g>
+              <path d="M150 125 L148 70 L95 55" stroke="#19d3b5" stroke-width="6" fill="none" stroke-linecap="round"/>
+              <circle cx="150" cy="95" r="7" fill="#3ea6ff" stroke="#fff" stroke-width="2.5"/>
+            </svg>
+            <div class="brand">UNLOCK BYD</div>
+          </div>
+          <div class="lab">Navegação</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ctrls">
+    <div class="card">
+      <h3>Simular dados (exemplo)</h3>
+      <div class="seg" id="segState">
+        <button class="b on" data-s="parado">Parado</button>
+        <button class="b" data-s="cidade">Cidade</button>
+        <button class="b" data-s="estrada">Estrada</button>
+        <button class="b" data-s="regen">Regen.</button>
+      </div>
+      <p class="foot">No carro, esses valores vêm da HAL <b>bydauto</b> (velocidade, potência, bateria) em tempo real.</p>
+    </div>
+    <div class="card">
+      <h3>Mostrar zona de segurança do BYD</h3>
+      <label class="tg"><input type="checkbox" id="showSafe" checked> Marcar as barras do BYD (cima/baixo)</label>
+      <label class="tg"><input type="checkbox" id="showByd" checked> Mostrar as barras do BYD</label>
+      <p class="foot">As barras do BYD ficam sempre por cima — o painel é desenhado pra não colidir com elas.</p>
+    </div>
+    <div class="card">
+      <h3>Layout central</h3>
+      <div class="seg" id="segLayout">
+        <button class="b on" data-l="3col">Potência · Vel · Mapa</button>
+        <button class="b" data-l="spd">Só velocidade</button>
+        <button class="b" data-l="map">Mapa grande</button>
+      </div>
+      <p class="foot">Dá pra montar vários temas (como o EVSound tem dezenas). Estes são só os primeiros.</p>
+    </div>
+  </div>
+
+  <p class="foot">Protótipo visual do nosso painel. Próximo passo: ligar os dados reais da HAL <b>bydauto</b> e projetar em tela cheia no cluster como teste.</p>
+</div>
+
+<script>
+(function(){
+  var S={parado:{s:0,p:0,eff:'—',mode:'Normal',regen:false},
+         cidade:{s:38,p:22,eff:'14,2 kWh',mode:'Normal',regen:false},
+         estrada:{s:104,p:61,eff:'17,8 kWh',mode:'Sport',regen:false},
+         regen:{s:46,p:-28,eff:'9,1 kWh',mode:'Eco',regen:true}};
+  var cur='parado';
+  function apply(){
+    var d=S[cur];
+    document.getElementById('spd').textContent=d.s;
+    document.getElementById('pwrV').textContent=d.p;
+    document.getElementById('effV').textContent=d.eff;
+    document.getElementById('mode').textContent=d.mode;
+    // power arc: map -100..400 kW to dashoffset (264 full)
+    var frac=Math.max(0,Math.min(1,(Math.abs(d.p))/150));
+    var arc=document.getElementById('pwrArc');
+    arc.style.strokeDashoffset=(264-frac*198).toFixed(0);
+    arc.setAttribute('stroke', d.regen? '#3ea6ff':'url(#gt)');
+    document.getElementById('effBar').className='fill'+(d.regen?' regen':'');
+    document.getElementById('effBar').style.width=(30+frac*60)+'%';
+  }
+  document.getElementById('segState').addEventListener('click',function(e){
+    var b=e.target.closest('.b'); if(!b)return; cur=b.dataset.s;
+    document.querySelectorAll('#segState .b').forEach(x=>x.classList.toggle('on',x===b)); apply();
+  });
+  document.getElementById('showSafe').addEventListener('change',function(e){
+    var v=e.target.checked?'block':'none';
+    document.getElementById('safet').style.display=v; document.getElementById('safeb').style.display=v;
+  });
+  document.getElementById('showByd').addEventListener('change',function(e){
+    var v=e.target.checked?'flex':'none';
+    document.getElementById('bydtop').style.display=v; document.getElementById('bydbot').style.display=v;
+  });
+  document.getElementById('segLayout').addEventListener('click',function(e){
+    var b=e.target.closest('.b'); if(!b)return; var l=b.dataset.l;
+    document.querySelectorAll('#segLayout .b').forEach(x=>x.classList.toggle('on',x===b));
+    document.getElementById('colL').style.display = l==='3col'?'flex':'none';
+    document.getElementById('colR').style.display = (l==='3col'||l==='map')?'flex':'none';
+    document.getElementById('colR').style.flex = l==='map'?'0 0 55%':'0 0 27%';
+  });
+  apply();
+})();
+</script>
+</body>
+</html>

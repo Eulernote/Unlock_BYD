@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulador do Cluster BYD 8.8"</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1f2630; --line:#2b333f;
+    --txt:#e6edf3; --muted:#9aa7b4; --accent:#3ea6ff; --green:#36d07b;
+    --chip:#0b0e13; --warn:#ffb020;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:transparent;color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    padding:14px;}
+  h1{font-size:16px;margin:0 0 2px}
+  .sub{color:var(--muted);font-size:12px;margin:0 0 14px}
+  .wrap{max-width:1180px;margin:0 auto}
+
+  /* ---- cluster ---- */
+  .stage{background:#000;border:1px solid var(--line);border-radius:14px;padding:10px;
+    box-shadow:0 10px 30px rgba(0,0,0,.4)}
+  .cluster{position:relative;width:100%;aspect-ratio:1280/480;border-radius:10px;overflow:hidden;
+    background:#000;user-select:none;touch-action:none}
+  .px{position:absolute;color:var(--muted);font-size:11px;right:8px;bottom:6px;opacity:.6;z-index:40}
+
+  /* app layer */
+  .app{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:1}
+  .app.box{inset:0;}
+  .bars{position:absolute;top:0;bottom:0;width:16.6%;background:#000;z-index:2;display:none}
+  .bars.l{left:0} .bars.r{right:0}
+  .show16 .bars{display:block}
+
+  /* waze-ish map */
+  .map{position:absolute;inset:0}
+  .videobox{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 50% 40%,#20262e,#0a0d11);color:#5b6b7b;font-weight:700;letter-spacing:2px}
+  .show16 .videobox{left:16.6%;right:16.6%}
+  .vlabel{font-size:13px;text-align:center}
+  .vlabel small{display:block;color:#415162;font-weight:600;letter-spacing:0;margin-top:4px;font-size:11px}
+
+  /* info chips */
+  .chip{position:absolute;z-index:20;background:rgba(10,14,20,.0);
+    padding:2px 6px;border-radius:6px;font-weight:700;white-space:nowrap;cursor:grab;
+    text-shadow:0 1px 3px rgba(0,0,0,.9);line-height:1.15}
+  .chip.plate{background:rgba(10,14,20,.55);border:1px solid rgba(255,255,255,.08)}
+  .chip .k{color:var(--muted);font-weight:600;font-size:.78em}
+  .chip:active{cursor:grabbing}
+  .chip.sel{outline:2px dashed var(--accent);outline-offset:2px}
+  .chip .big{font-size:1.25em}
+  .green{color:var(--green)} .blue{color:var(--accent)} .warn{color:var(--warn)}
+
+  /* ---- controls ---- */
+  .row{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px;flex:1;min-width:230px}
+  .card h3{margin:0 0 10px;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .seg{display:flex;flex-wrap:wrap;gap:6px}
+  button.b{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+    padding:7px 11px;border-radius:8px;font-size:12.5px;cursor:pointer;transition:.12s}
+  button.b:hover{border-color:#3d4654}
+  button.b.on{background:var(--accent);border-color:var(--accent);color:#06121f;font-weight:700}
+  .toggles{display:flex;flex-direction:column;gap:7px}
+  .tg{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
+  .tg label{display:flex;align-items:center;gap:8px;cursor:pointer}
+  .tg input{width:16px;height:16px;accent-color:var(--accent)}
+  .hint{color:var(--muted);font-size:12px;line-height:1.5;margin-top:10px}
+  .foot{color:var(--muted);font-size:11.5px;margin-top:14px;line-height:1.5}
+  .tag{display:inline-block;background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+    padding:1px 7px;font-size:11px;color:var(--muted);margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Simulador do Cluster BYD 8.8" <span class="tag">1280 × 480</span></h1>
+  <p class="sub">Mockup pra alinhar o visual. Arraste as informações pra onde quiser; ligue/desligue cada uma. O app fica em tela cheia por baixo.</p>
+
+  <div class="stage">
+    <div id="cluster" class="cluster show-full">
+      <!-- APP LAYER -->
+      <div class="app">
+        <!-- WAZE map -->
+        <svg class="map" id="mapLayer" viewBox="0 0 1280 480" preserveAspectRatio="xMidYMid slice">
+          <rect width="1280" height="480" fill="#c9d2da"/>
+          <g stroke="#aeb9c4" stroke-width="10" fill="none">
+            <path d="M-50 120 L1330 60"/><path d="M-50 260 L1330 210"/><path d="M-50 400 L1330 360"/>
+            <path d="M160 -20 L60 500"/><path d="M420 -20 L360 500"/><path d="M720 -20 L690 500"/>
+            <path d="M1000 -20 L1010 500"/>
+          </g>
+          <g stroke="#dfe6ec" stroke-width="22" fill="none">
+            <path d="M-50 190 L1330 150"/><path d="M560 -20 L520 500"/>
+          </g>
+          <rect x="820" y="150" width="200" height="120" fill="#bfe6c4" opacity=".7"/>
+          <rect x="120" y="300" width="160" height="90" fill="#bfe6c4" opacity=".7"/>
+          <!-- route -->
+          <path d="M1020 470 L1015 300 L900 250" stroke="#6b3df2" stroke-width="20" fill="none" stroke-linecap="round" opacity=".85"/>
+          <!-- car marker (near bottom, to show it getting covered) -->
+          <g id="carMk"><circle cx="1015" cy="430" r="34" fill="#3ea6ff" opacity=".25"/>
+            <circle cx="1015" cy="430" r="13" fill="#1a73e8" stroke="#fff" stroke-width="4"/></g>
+          <g transform="translate(905,235)"><rect x="-58" y="-20" width="116" height="40" rx="8" fill="#6b3df2"/>
+            <text x="0" y="6" fill="#fff" font-size="20" font-family="Arial" text-anchor="middle" font-weight="700">Rua PB-6</text></g>
+        </svg>
+        <!-- VIDEO -->
+        <div class="videobox" id="videoLayer" style="display:none">
+          <div class="vlabel" id="vtext">▶ VÍDEO<small>em tela cheia (corta um pouco de cima/baixo)</small></div>
+        </div>
+      </div>
+
+      <!-- 16:9 side bars (only in "16:9" mode) -->
+      <div class="bars l"></div><div class="bars r"></div>
+
+      <!-- INFO CHIPS (draggable) -->
+      <div id="chips"></div>
+      <div class="px">1280 × 480 px</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card">
+      <h3>Conteúdo no cluster</h3>
+      <div class="seg" id="segContent">
+        <button class="b on" data-c="waze">Waze / Mapa</button>
+        <button class="b" data-c="video">Vídeo (YouTube)</button>
+      </div>
+      <h3 style="margin-top:14px">Preenchimento</h3>
+      <div class="seg" id="segFill">
+        <button class="b on" data-f="full">Tela cheia (sem tarjas)</button>
+        <button class="b" data-f="box16">16:9 (com tarjas) — o que está hoje</button>
+      </div>
+      <p class="hint">No "tela cheia", o app ocupa os 1280×480. Pra <b>vídeo</b>, encher tudo corta um pouco de cima/baixo (16:9 ≠ ultrawide). Pro <b>Waze</b>, ele preenche sem cortar nada.</p>
+    </div>
+
+    <div class="card">
+      <h3>Painel de informações (presets)</h3>
+      <div class="seg" id="segPreset">
+        <button class="b" data-p="byd">Nativo BYD (atual)</button>
+        <button class="b on" data-p="corners">Cantos (mapa livre)</button>
+        <button class="b" data-p="footer">Rodapé fino</button>
+        <button class="b" data-p="none">Sem info</button>
+      </div>
+      <p class="hint">Cada preset é um ponto de partida — depois é só <b>arrastar</b> cada info no cluster pra onde o cliente quiser. Clique num preset pra reposicionar tudo.</p>
+      <button class="b" id="resetBtn" style="margin-top:4px">↺ Resetar posições</button>
+    </div>
+
+    <div class="card">
+      <h3>Informações visíveis</h3>
+      <div class="toggles" id="toggles"></div>
+    </div>
+  </div>
+
+  <p class="foot">
+    Representação visual (não é o cluster real). As infos são arrastáveis para simular os "painéis" que o cliente escolhe.
+    A projeção do app em tela cheia nós já conseguimos; <b>remover/realocar o overlay nativo do BYD</b> (as infos de verdade) depende de ajuste no modo de projeção do carro.
+  </p>
+</div>
+
+<script>
+(function(){
+  var cluster=document.getElementById('cluster');
+  var chipsEl=document.getElementById('chips');
+  var togglesEl=document.getElementById('toggles');
+
+  // info definitions. pos = % (x,y) within cluster, anchor center.
+  var INFOS=[
+    {id:'hora', html:'<span class="big">15:03</span>', on:true},
+    {id:'marcha', html:'<span class="big green">P</span>', on:true},
+    {id:'temp', html:'37°C', on:true},
+    {id:'vel', html:'<span class="big">0</span> <span class="k">km/h</span>', on:true},
+    {id:'pot', html:'<span class="big">0</span> <span class="k">kW</span>', on:true},
+    {id:'bat', html:'<span class="green">44%</span>', on:true},
+    {id:'auton', html:'<span class="blue">168</span> <span class="k">km</span>', on:true},
+    {id:'trip', html:'<span class="k">TRIP A</span> 256,5 km', on:true},
+    {id:'radar', html:'<span class="warn">◉</span> Radar 190 m', on:false},
+  ];
+  var NAMES={hora:'Hora',marcha:'Marcha (P/D)',temp:'Temperatura',vel:'Velocidade',
+    pot:'Potência (kW)',bat:'Bateria %',auton:'Autonomia',trip:'Trip',radar:'Radar/alertas'};
+
+  var PRESETS={
+    byd:{ // imita o nativo: faixa em cima e embaixo
+      hora:[42,7],marcha:[52,7],temp:[72,7],vel:[6,7],
+      pot:[8,88],bat:[42,90],auton:[60,90],trip:[88,92],radar:[18,74]
+    },
+    corners:{ // cantos, mapa livre no meio
+      hora:[8,8],marcha:[8,20],temp:[92,8],vel:[8,90],
+      pot:[24,90],bat:[92,88],auton:[78,90],trip:[50,93],radar:[50,8]
+    },
+    footer:{ // tudo numa faixa fina embaixo
+      hora:[7,92],marcha:[16,92],temp:[26,92],vel:[38,92],
+      pot:[50,92],bat:[62,92],auton:[74,92],trip:[90,92],radar:[50,8]
+    },
+    none:{}
+  };
+
+  var state={content:'waze',fill:'full',preset:'corners',pos:{}};
+
+  function applyPreset(name){
+    state.preset=name;
+    var p=PRESETS[name]||{};
+    INFOS.forEach(function(i){
+      if(name==='none'){ i.on=false; }
+      else if(p[i.id]){ i.on=true; state.pos[i.id]={x:p[i.id][0],y:p[i.id][1]}; }
+    });
+    render();
+  }
+
+  function render(){
+    // content
+    document.getElementById('mapLayer').style.display = state.content==='waze'?'block':'none';
+    document.getElementById('videoLayer').style.display = state.content==='video'?'flex':'none';
+    // fill mode
+    cluster.classList.toggle('show16', state.fill==='box16');
+    // video text depends on fill
+    document.getElementById('vtext').innerHTML = state.fill==='box16'
+      ? '▶ VÍDEO<small>proporção 16:9 — tarjas pretas nas laterais</small>'
+      : '▶ VÍDEO<small>tela cheia (corta um pouco de cima/baixo)</small>';
+    // chips
+    chipsEl.innerHTML='';
+    INFOS.forEach(function(i){
+      if(!i.on) return;
+      var pos=state.pos[i.id]||{x:50,y:50};
+      var el=document.createElement('div');
+      el.className='chip plate';
+      el.dataset.id=i.id;
+      el.innerHTML=i.html;
+      el.style.left=pos.x+'%'; el.style.top=pos.y+'%';
+      el.style.transform='translate(-50%,-50%)';
+      chipsEl.appendChild(el);
+      makeDraggable(el,i.id);
+    });
+    // toggles
+    togglesEl.innerHTML='';
+    INFOS.forEach(function(i){
+      var r=document.createElement('div'); r.className='tg';
+      r.innerHTML='<label><input type="checkbox" '+(i.on?'checked':'')+'> '+NAMES[i.id]+'</label>';
+      r.querySelector('input').addEventListener('change',function(e){
+        i.on=e.target.checked;
+        if(i.on && !state.pos[i.id]) state.pos[i.id]={x:50,y:50};
+        render();
+      });
+      togglesEl.appendChild(r);
+    });
+    // seg active states
+    mark('segContent','c',state.content); mark('segFill','f',state.fill); mark('segPreset','p',state.preset);
+  }
+
+  function mark(segId,attr,val){
+    document.querySelectorAll('#'+segId+' .b').forEach(function(b){
+      b.classList.toggle('on', b.dataset[attr]===val);
+    });
+  }
+
+  function makeDraggable(el,id){
+    el.addEventListener('pointerdown',function(ev){
+      ev.preventDefault();
+      document.querySelectorAll('.chip').forEach(c=>c.classList.remove('sel'));
+      el.classList.add('sel');
+      el.setPointerCapture(ev.pointerId);
+      var rect=cluster.getBoundingClientRect();
+      function move(e){
+        var x=((e.clientX-rect.left)/rect.width)*100;
+        var y=((e.clientY-rect.top)/rect.height)*100;
+        x=Math.max(2,Math.min(98,x)); y=Math.max(4,Math.min(96,y));
+        state.pos[id]={x:x,y:y};
+        el.style.left=x+'%'; el.style.top=y+'%';
+      }
+      function up(e){ el.releasePointerCapture(ev.pointerId);
+        el.removeEventListener('pointermove',move); el.removeEventListener('pointerup',up); }
+      el.addEventListener('pointermove',move); el.addEventListener('pointerup',up);
+    });
+  }
+
+  document.getElementById('segContent').addEventListener('click',function(e){
+    var b=e.target.closest('.b'); if(!b)return; state.content=b.dataset.c; render(); });
+  document.getElementById('segFill').addEventListener('click',function(e){
+    var b=e.target.closest('.b'); if(!b)return; state.fill=b.dataset.f; render(); });
+  document.getElementById('segPreset').addEventListener('click',function(e){
+    var b=e.target.closest('.b'); if(!b)return; applyPreset(b.dataset.p); });
+  document.getElementById('resetBtn').addEventListener('click',function(){ applyPreset(state.preset); });
+
+  applyPreset('corners');
+})();
+</script>
+</body>
+</html>

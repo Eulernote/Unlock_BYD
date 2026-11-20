@@ -26,7 +26,7 @@ object ClusterCast {
     // Dicionário oficial BYD (clusterdebug/SecondActivity): sendInfo(1000, code, "").
     //   0 = host restaura stream do cluster · 16 =投屏 TELA CHEIA liga · 17 = 投屏 MEIA-TELA liga
     //   18 = projeção desliga · 29/30/31 = tela 8,8"/12,3"/10,25" · 35 = modo Di4.0 (redesenha gauges!)
-    // ON = 0 → 16 (restaura o stream e liga tela cheia). Caminho conhecido bom (v36–v39).
+    // ON = 0 → 16 (restaura o stream e liga tela cheia). NÃO mandar 35/46 (redesenham o painel por cima).
     private val ON_SEQUENCE = listOf(0, 16)
     // Meia-tela (17): app numa parte, gauges na outra, sem sobrepor.
     private val ON_SEQUENCE_HALF = listOf(0, 17)
@@ -68,9 +68,9 @@ object ClusterCast {
         val base = baseDensity(h)
         val p = pkg.lowercase()
         return when {
-            // Waze/mapas: L105 T0 R118 B18 — base bem baixa, "tempo de chegada" alinha com a linha de bateria/km do BYD.
+            // Waze/mapas: L105 T0 R118 B48 — base mais baixa (Waze desce), carro ainda visível.
             p.contains("waze") || p.contains("maps") || p.contains("navi") ->
-                AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(18, h))
+                AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(48, h))
             // Vídeo: L120 T54 R120 B73 (área ~1040×353).
             p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
             p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") ->
@@ -320,27 +320,13 @@ object ClusterCast {
     // ---------- ações ----------
 
     /** Joga o app que está na tela pro cluster: cria a superfície, detecta o perfil, ajusta e relança. */
-    /** Espera a segunda tela do cluster aparecer, até timeoutMs. Retorna o id (>0) ou -1. */
-    private fun waitForDisplay(ctx: Context, timeoutMs: Long): Int {
-        val until = System.currentTimeMillis() + timeoutMs
-        while (System.currentTimeMillis() < until) {
-            val id = clusterDisplayId(ctx); if (id > 0) return id; Thread.sleep(200)
-        }
-        return -1
-    }
-
     fun throwToCluster(ctx: Context): Result {
-        val seqStr = ON_SEQUENCE.joinToString("→")
-        var seqOk = openSurface(ctx)
-        var id = waitForDisplay(ctx, 7000)
-        // Self-heal: se não criou a tela, o serviço do cluster pode ter travado. Reinicia e tenta de novo.
-        if (id < 0) {
-            AdbShell.resetClusterService(ctx)
-            Thread.sleep(2500)
-            seqOk = openSurface(ctx)
-            id = waitForDisplay(ctx, 9000)
-        }
-        if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster mesmo após reiniciar o serviço (sequência $seqStr ${if (seqOk) "respondeu ok" else "falhou em algum passo"}). Tente reiniciar a multimídia.") }
+        val seqOk = openSurface(ctx)
+        // O display só aparece depois do 35: o app de referência procura por até ~6s.
+        var id = -1
+        val until = System.currentTimeMillis() + 7000
+        while (System.currentTimeMillis() < until) { id = clusterDisplayId(ctx); if (id > 0) break; Thread.sleep(200) }
+        if (id < 0) { releaseSurface(ctx); return Result(false, "não achei o display do cluster (sequência 16→35→46 ${if (seqOk) "respondeu ok" else "falhou em algum passo"})") }
 
         // Perfil do cluster (resolução + densidade reais) — decide a geometria por tamanho.
         val prof = readProfile(ctx)
