@@ -255,7 +255,45 @@ class MainActivity : Activity() {
         card.addView(tv(Store.carId(this), 30f, ACCENT, true).apply { setTypeface(Typeface.MONOSPACE, Typeface.BOLD); setPadding(0, dp(4), 0, dp(26)) })
         val b = Button(this); b.text = "Verificar novamente"; styleBtn(b, ACCENT, 0xFF04201D.toInt()); b.setOnClickListener { checkGate() }
         card.addView(b)
+
+        // BYD simples: atalho pra abrir a depuração USB (menu oculto da BYD, direto, sem QR Code),
+        // enquanto aguarda a ativação — pra o instalador liberar o ADB e setar o Device Owner.
+        if (Store.grupo(this) == "byd_simples") {
+            val adb = Button(this); adb.text = "Abrir depuração USB (ADB)"; styleBtn(adb, SURFACE2, TEXT)
+            adb.background = rounded(SURFACE2, 10, 1, BORDER); adb.setTextColor(TEXT)
+            val alp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); alp.topMargin = dp(10); adb.layoutParams = alp
+            adb.setOnClickListener { openBydDevTools() }
+            card.addView(adb)
+        }
+
         container.addView(card)
+    }
+
+    /**
+     * Abre o menu oculto de desenvolvedor da BYD DIRETO, sem passar pelo QR Code de verificação.
+     * O segredo (confirmado nos apps de referência) é o extra "Development.verify.requestCode"=1
+     * no intent pra com.byd.byddevelopmenttools. Cai no menu onde se ativa a Depuração USB.
+     */
+    private fun openBydDevTools() {
+        val pkg = "com.byd.byddevelopmenttools"
+        for (cls in listOf("$pkg.MainActivity", "$pkg.VerificationActivity")) {
+            try {
+                startActivity(Intent().apply {
+                    component = ComponentName(pkg, cls)
+                    putExtra("Development.verify.requestCode", 1)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                return
+            } catch (e: Exception) {}
+        }
+        // Fallback: opções de desenvolvedor padrão do Android.
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            toast("Ative a Depuração USB nesta tela.")
+            return
+        } catch (e: Exception) {}
+        toast("Não foi possível abrir a tela de ADB neste veículo.")
     }
 
     // ---------- Onboarding (primeiro uso) ----------
