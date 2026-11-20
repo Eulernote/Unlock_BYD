@@ -431,6 +431,25 @@ class MainActivity : Activity() {
         asb.setOnClickListener { showAutostart() }
         container.addView(asb)
 
+        // Esconder/mostrar barras (superior e inferior) da multimídia — modo imersivo, via ADB.
+        val barsHidden = Store.barsHidden(this)
+        val bars = Button(this); bars.text = if (barsHidden) "☰ Mostrar barras" else "⊠ Esconder barras"; styleBtn(bars, SURFACE2, TEXT)
+        bars.background = rounded(SURFACE2, 10, 1, BORDER); bars.setTextColor(TEXT)
+        val barlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); barlp.topMargin = dp(8); bars.layoutParams = barlp
+        bars.setOnClickListener {
+            val hide = !Store.barsHidden(this)
+            toast(if (hide) "Escondendo barras…" else "Mostrando barras…")
+            Thread {
+                val r = if (hide) AdbShell.hideBars(applicationContext) else AdbShell.showBars(applicationContext)
+                if (r.ok) Store.setBarsHidden(applicationContext, hide)
+                runOnUiThread {
+                    toast(if (r.ok) (if (hide) "Barras escondidas (arraste da borda pra ver)" else "Barras restauradas") else "Falha: ${r.reason}")
+                    showCatalog()
+                }
+            }.start()
+        }
+        container.addView(bars)
+
         for (e in visible) container.addView(appCard(e))
 
         if (dpm.isDeviceOwnerApp(packageName)) {
@@ -979,8 +998,9 @@ class MainActivity : Activity() {
 
     /** Liga/desliga o ícone flutuante conforme as configurações e a permissão. */
     private fun applyClusterOverlay() {
-        if (Store.clusterEnabled(this) && Store.clusterMode(this) == "icon" && canOverlay())
-            ClusterOverlayService.start(this)
+        val m = Store.clusterMode(this)
+        if (Store.clusterEnabled(this) && canOverlay() && (m == "icon" || m == "gesture4"))
+            ClusterOverlayService.start(this)   // o serviço escolhe ícone e/ou gesto pelo modo
         else
             ClusterOverlayService.stop(this)
     }
@@ -1040,13 +1060,17 @@ class MainActivity : Activity() {
             icon.setOnClickListener { Store.setClusterMode(this, "icon"); applyClusterOverlay(); showClusterSettings() }
             card.addView(icon)
 
-            val gest = Button(this); gest.text = "Gesto (dois dedos) · em breve"; styleBtn(gest, SURFACE, MUTED)
-            gest.background = rounded(SURFACE, 9, 1, BORDER); gest.isEnabled = false; gest.alpha = 0.5f
+            val gest = Button(this); gest.text = if (mode == "gesture4") "● 4 dedos (tela toda) · teste" else "4 dedos (tela toda) · teste"
+            styleBtn(gest, if (mode == "gesture4") SURFACE2 else SURFACE, if (mode == "gesture4") ACCENT else MUTED)
+            gest.background = rounded(if (mode == "gesture4") SURFACE2 else SURFACE, 9, 1, if (mode == "gesture4") ACCENT else BORDER)
             val glp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); glp.topMargin = dp(8); gest.layoutParams = glp
+            gest.setOnClickListener { Store.setClusterMode(this, "gesture4"); applyClusterOverlay(); showClusterSettings() }
             card.addView(gest)
 
             if (Store.clusterMode(this) == "icon" && canOverlay())
                 card.addView(tv("O ícone ⤢ fica na tela. Toque para enviar o app atual ao cluster; toque de novo para trazer de volta.", 12f, MUTED).apply { setPadding(0, dp(12), 0, 0) })
+            if (Store.clusterMode(this) == "gesture4" && canOverlay())
+                card.addView(tv("4 dedos para a ESQUERDA = enviar ao cluster; para a DIREITA = trazer de volta. ATENÇÃO: no modo tela toda, 1 dedo pode ficar bloqueado — segure o ícone ⤢ para desligar o modo. É um teste.", 12f, 0xFFF2C25B.toInt()).apply { setPadding(0, dp(12), 0, 0) })
 
             // Diagnóstico
             val diag = Button(this); diag.text = "Diagnóstico do cluster"; styleBtn(diag, SURFACE2, TEXT); diag.background = rounded(SURFACE2, 9, 1, BORDER)

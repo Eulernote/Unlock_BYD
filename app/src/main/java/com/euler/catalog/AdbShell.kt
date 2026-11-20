@@ -159,6 +159,20 @@ object AdbShell {
             .let { if (it.output.contains("UBYD_OK")) Result(true, it.output) else it }
     }
 
+    /** Esconde as barras superior e inferior da multimídia (modo imersivo). Precisa de shell. */
+    fun hideBars(ctx: Context): Result {
+        val r = run(ctx, "settings put global policy_control immersive.full=* 2>&1 ; echo UBYD_OK", 10000)
+        return if (r.output.contains("UBYD_OK") && !r.output.contains("Error", true) && !r.output.contains("Exception", true))
+            Result(true, r.output) else Result(false, r.output, r.reason.ifBlank { r.output.take(120) })
+    }
+
+    /** Restaura as barras superior e inferior. */
+    fun showBars(ctx: Context): Result {
+        val r = run(ctx, "settings put global policy_control null 2>&1 ; echo UBYD_OK", 10000)
+        return if (r.output.contains("UBYD_OK") && !r.output.contains("Error", true) && !r.output.contains("Exception", true))
+            Result(true, r.output) else Result(false, r.output, r.reason.ifBlank { r.output.take(120) })
+    }
+
     private fun parseDpmError(out: String): String = when {
         out.contains("already", true) && out.contains("owner", true) -> "já existe um owner/admin definido"
         out.contains("account", true) -> "há conta(s) cadastradas no carro — remova antes"

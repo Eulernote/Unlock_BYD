@@ -77,6 +77,9 @@ object Store {
     fun clusterMode(ctx: Context): String = prefs(ctx).getString("clusterMode", "icon") ?: "icon"
     fun setClusterMode(ctx: Context, m: String) { prefs(ctx).edit().putString("clusterMode", m).apply() }
 
+    fun barsHidden(ctx: Context): Boolean = prefs(ctx).getBoolean("barsHidden", false)
+    fun setBarsHidden(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean("barsHidden", v).apply() }
+
     /** App do catálogo (para auto-atualização): pacote, url e número de build. */
     data class CatApp(val pkg: String, val url: String, val build: Int)
     fun catalogApps(): List<CatApp> {
