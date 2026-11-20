@@ -167,11 +167,22 @@ class MainActivity : Activity() {
         val t = TextView(this); t.text = text; t.textSize = size; t.setTextColor(color)
         if (bold) t.setTypeface(null, Typeface.BOLD); return t
     }
+    private var logoTaps = 0
+    private var lastLogoTap = 0L
+
     private fun headerView(subtitle: String): LinearLayout {
         val h = LinearLayout(this); h.orientation = LinearLayout.HORIZONTAL; h.gravity = Gravity.CENTER_VERTICAL
         h.setPadding(0, 0, 0, dp(18))
         val logo = ImageView(this); logo.layoutParams = LinearLayout.LayoutParams(dp(46), dp(46))
         logo.background = rounded(0xFFFFFFFF.toInt(), 12); logo.setPadding(dp(5), dp(5), dp(5), dp(5)); logo.setImageResource(R.mipmap.ic_launcher)
+        // Atalho escondido: tocar 5× na logo abre o menu de depuração USB da BYD (pra carros já
+        // ativados, caso precise reabrir o ADB). Não fica à mostra.
+        logo.setOnClickListener {
+            val now = System.currentTimeMillis()
+            logoTaps = if (now - lastLogoTap > 1500) 1 else logoTaps + 1
+            lastLogoTap = now
+            if (logoTaps >= 5) { logoTaps = 0; openBydDevTools() }
+        }
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL; col.setPadding(dp(12), 0, 0, 0)
         // Título + versão instalada (ex.: "v15"), para conferir no carro qual versão está rodando.
         val titleRow = LinearLayout(this); titleRow.orientation = LinearLayout.HORIZONTAL; titleRow.gravity = Gravity.CENTER_VERTICAL
