@@ -29,6 +29,16 @@
             </intent-filter>
         </activity>
 
+        <!-- "Tela limpa": entra em PiP pra o launcher esconder o dock da home. -->
+        <activity
+            android:name=".PipActivity"
+            android:exported="false"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:launchMode="singleTask"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboard|keyboardHidden|navigation|uiMode"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <receiver
             android:name=".CatalogAdminReceiver"
             android:permission="android.permission.BIND_DEVICE_ADMIN"

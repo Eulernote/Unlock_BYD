@@ -450,6 +450,16 @@ class MainActivity : Activity() {
         }
         container.addView(bars)
 
+        // Tela limpa: entra em PiP pra o launcher esconder o dock da home (teste).
+        val clean = Button(this); clean.text = "🖼 Tela limpa (esconder dock) · teste"; styleBtn(clean, SURFACE2, TEXT)
+        clean.background = rounded(SURFACE2, 10, 1, BORDER); clean.setTextColor(TEXT)
+        val cllp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); cllp.topMargin = dp(8); clean.layoutParams = cllp
+        clean.setOnClickListener {
+            PipActivity.open(this)
+            toast("Abrindo tela limpa… espere ~3s na home. Feche a janelinha (X) pra voltar o dock.")
+        }
+        container.addView(clean)
+
         for (e in visible) container.addView(appCard(e))
 
         if (dpm.isDeviceOwnerApp(packageName)) {
