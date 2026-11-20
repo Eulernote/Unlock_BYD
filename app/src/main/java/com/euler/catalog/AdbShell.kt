@@ -187,6 +187,17 @@ object AdbShell {
         return run(ctx, cmd, 25000)
     }
 
+    /** Reinicia o serviço do cluster quando ele trava e para de criar a segunda tela (fission_bg).
+     *  Force-stop no containerservice (que cria o display) + clusterdebug, e limpa geometria resídua. */
+    fun resetClusterService(ctx: Context): Result {
+        val cmd =
+            "wm density reset -d 1 2>/dev/null; wm overscan reset -d 1 2>/dev/null; " +
+            "am force-stop com.xdja.containerservice 2>&1; " +
+            "am force-stop com.byd.clusterdebug 2>&1; " +
+            "sleep 2; echo 'servico do cluster reiniciado'"
+        return run(ctx, cmd, 20000)
+    }
+
     /** Copia os APKs dos apps do cluster (containerservice + clusterdebug) para /sdcard/Download. */
     fun extractClusterApks(ctx: Context): Result {
         val cmd =
