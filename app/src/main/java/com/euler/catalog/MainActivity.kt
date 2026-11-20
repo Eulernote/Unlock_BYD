@@ -1053,9 +1053,11 @@ class MainActivity : Activity() {
 
     /** Liga/desliga o ícone flutuante conforme as configurações e a permissão. */
     private fun applyClusterOverlay() {
+        // Gesto de 4 dedos desativado por enquanto: se algum carro tiver esse modo salvo, volta p/ ícone.
+        if (Store.clusterMode(this) == "gesture4") Store.setClusterMode(this, "icon")
         val m = Store.clusterMode(this)
-        if (Store.clusterEnabled(this) && canOverlay() && (m == "icon" || m == "gesture4"))
-            ClusterOverlayService.start(this)   // o serviço escolhe ícone e/ou gesto pelo modo
+        if (Store.clusterEnabled(this) && canOverlay() && m == "icon")
+            ClusterOverlayService.start(this)   // só ícone flutuante
         else
             ClusterOverlayService.stop(this)
     }
@@ -1115,17 +1117,10 @@ class MainActivity : Activity() {
             icon.setOnClickListener { Store.setClusterMode(this, "icon"); applyClusterOverlay(); showClusterSettings() }
             card.addView(icon)
 
-            val gest = Button(this); gest.text = if (mode == "gesture4") "● 4 dedos (tela toda) · teste" else "4 dedos (tela toda) · teste"
-            styleBtn(gest, if (mode == "gesture4") SURFACE2 else SURFACE, if (mode == "gesture4") ACCENT else MUTED)
-            gest.background = rounded(if (mode == "gesture4") SURFACE2 else SURFACE, 9, 1, if (mode == "gesture4") ACCENT else BORDER)
-            val glp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); glp.topMargin = dp(8); gest.layoutParams = glp
-            gest.setOnClickListener { Store.setClusterMode(this, "gesture4"); applyClusterOverlay(); showClusterSettings() }
-            card.addView(gest)
+            // Gesto de 4 dedos DESATIVADO por enquanto (ainda não testado) — botão fora do ar.
 
             if (Store.clusterMode(this) == "icon" && canOverlay())
                 card.addView(tv("O ícone ⤢ fica na tela. Toque para enviar o app atual ao cluster; toque de novo para trazer de volta.", 12f, MUTED).apply { setPadding(0, dp(12), 0, 0) })
-            if (Store.clusterMode(this) == "gesture4" && canOverlay())
-                card.addView(tv("4 dedos para a ESQUERDA = enviar ao cluster; para a DIREITA = trazer de volta. ATENÇÃO: no modo tela toda, 1 dedo pode ficar bloqueado — segure o ícone ⤢ para desligar o modo. É um teste.", 12f, 0xFFF2C25B.toInt()).apply { setPadding(0, dp(12), 0, 0) })
 
             // Diagnóstico, reativação completa e modo de projeção (teste) foram para o menu escondido
             // (5 toques na logo), pra deixar esta tela limpa.
