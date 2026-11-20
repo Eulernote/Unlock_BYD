@@ -1128,6 +1128,15 @@ class MainActivity : Activity() {
                 Thread { val txt = ClusterCast.diagnose(applicationContext); runOnUiThread { showDiagnostic(txt) } }.start()
             }
             card.addView(diag)
+
+            // Reativação completa (diagnóstico): tenta várias sequências até recriar a 2ª tela.
+            val deep = Button(this); deep.text = "⟳ Reativação completa do cluster · teste"; styleBtn(deep, SURFACE2, TEXT); deep.background = rounded(SURFACE2, 9, 1, BORDER)
+            val deeplp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT); deeplp.topMargin = dp(10); deep.layoutParams = deeplp
+            deep.setOnClickListener {
+                toast("Tentando reativar o cluster (pode levar ~1 min)…")
+                Thread { val txt = ClusterCast.deepReactivate(applicationContext); runOnUiThread { showDiagnostic("Reativação completa do cluster\n\n$txt") } }.start()
+            }
+            card.addView(deep)
         }
 
         container.addView(card)

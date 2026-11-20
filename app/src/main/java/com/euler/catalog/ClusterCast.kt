@@ -319,6 +319,51 @@ object ClusterCast {
 
     // ---------- ações ----------
 
+    /** Espera a 2ª tela aparecer, até timeoutMs. Retorna o id (>0) ou -1. */
+    private fun pollDisplay(ctx: Context, timeoutMs: Long): Int {
+        val until = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < until) {
+            val id = clusterDisplayId(ctx); if (id > 0) return id; Thread.sleep(250)
+        }
+        return -1
+    }
+
+    /**
+     * Reativação completa (diagnóstico): tenta várias sequências SEGURAS de init, uma a uma,
+     * esperando a 2ª tela aparecer depois de cada uma. Reporta qual recriou o display.
+     * Só códigos seguros — nunca 41/86/87/91/92 (stress/crash).
+     */
+    fun deepReactivate(ctx: Context): String {
+        val sb = StringBuilder()
+        val pid = AdbShell.run(ctx, "pidof com.xdja.containerservice 2>/dev/null", 6000).output.trim()
+        sb.append("containerservice pid: ${if (pid.isBlank()) "(não está rodando!)" else pid}\n")
+        val svc = AdbShell.run(ctx, "service check AutoContainer 2>&1", 5000).output.trim()
+        sb.append("AutoContainer: $svc\n\n")
+
+        // Garante stream reconectado antes de tudo.
+        val attempts = listOf(
+            "16 → 35 → 46 (original v33)" to listOf(16, 35, 46),
+            "1 → 0 → 16 (reconecta stream)" to listOf(1, 0, 16),
+            "34 → 0 → 16 (modo Di3.0)" to listOf(34, 0, 16),
+            "29 → 35 → 16 (8,8\" + Di4.0)" to listOf(29, 35, 16),
+            "0 → 17 (meia-tela)" to listOf(0, 17)
+        )
+        for ((name, seq) in attempts) {
+            sb.append("Tentativa [$name]: ")
+            for (c in seq) { callCode(ctx, c); Thread.sleep(1300) }
+            val id = pollDisplay(ctx, 12000)
+            if (id > 0) {
+                sb.append("✓ DISPLAY #$id CRIADO!\n\n>>> Funcionou com: $name <<<\nMe mande este texto que eu fixo essa sequência no app.\n")
+                return sb.toString()
+            }
+            sb.append("sem display\n")
+            // desliga antes da próxima tentativa
+            callCode(ctx, 18); Thread.sleep(1200)
+        }
+        sb.append("\nNenhuma sequência recriou o display. O serviço do cluster responde mas não cria mais a 2ª tela — provável estado persistente corrompido no com.xdja.containerservice. Próximo passo seria limpar os dados dele (pm clear) ou uma reinstalação do serviço do cluster.\n")
+        return sb.toString()
+    }
+
     /** Joga o app que está na tela pro cluster: cria a superfície, detecta o perfil, ajusta e relança. */
     fun throwToCluster(ctx: Context): Result {
         val seqOk = openSurface(ctx)
