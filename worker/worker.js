@@ -12,7 +12,7 @@ const FILE_ADMINS = ['euler', 'luis'];
 const PLANS = ['basico', 'intermediario', 'premium'];
 const GROUPS = ['byd_simples', 'byd_google', 'chery', 'geely'];
 const TOKEN_TTL_MS = 1000 * 60 * 60 * 12; // 12h
-const SEEN_MIN_MS = 1000 * 60 * 4;        // só regrava o "visto" se passou 4 min (poupa gravações no KV)
+const SEEN_MIN_MS = 1000 * 60 * 30;       // só regrava o "visto" se passou 30 min (poupa gravações no KV)
 const CMD_TTL_MS  = 1000 * 60 * 10;       // comando pendente (ex.: setar Device Owner) expira em 10 min
 function planLabel(p){ return p==='premium' ? 'Premium' : p==='intermediario' ? 'Intermediário' : 'Básico'; }
 function grupoLabel(g){ return g==='byd_google' ? 'BYD · Google' : g==='chery' ? 'Chery' : g==='geely' ? 'Geely' : 'BYD · Simples'; }
@@ -77,6 +77,11 @@ async function touchVer(env, id, vc, sdk, au){
 async function getDo(env, id){ return await env.KV.get('do:'+id, {type:'json'}); }
 async function putDo(env, id, owner, detail){
   await env.KV.put('do:'+id, JSON.stringify({owner: !!owner, at: Date.now(), detail: detail || ''}));
+}
+// Grava o estado de Device Owner SÓ quando muda (o carro manda isso em todo check-in; sem isso seria 1 escrita/ping).
+async function touchDo(env, id, owner){
+  const cur = await env.KV.get('do:'+id, {type:'json'});
+  if(!cur || cur.owner !== !!owner) await putDo(env, id, owner, cur ? cur.detail : '');
 }
 // Comando pendente do painel para o carro (ex.: {type:'set-do', by, at}). Entregue no ping e consumido pelo carro.
 async function getCmd(env, id){
@@ -165,13 +170,18 @@ async function serveR2(env, key, request){
 /* ---------- handler ---------- */
 export default {
   async fetch(request, env){
-    let res = await handle(request, env);
-    // Sessão deslizante: toda resposta autenticada devolve um token renovado (12h a partir de agora).
-    if(env.SECRET && request.headers.get('Authorization')){
-      const u = await authUser(env, request);
-      if(u){ res = new Response(res.body, res); res.headers.set('X-Token', await makeToken(env.SECRET, u)); }
+    try {
+      let res = await handle(request, env);
+      // Sessão deslizante: toda resposta autenticada devolve um token renovado (12h a partir de agora).
+      if(env.SECRET && request.headers.get('Authorization')){
+        const u = await authUser(env, request);
+        if(u){ res = new Response(res.body, res); res.headers.set('X-Token', await makeToken(env.SECRET, u)); }
+      }
+      return res;
+    } catch(e){
+      // Nunca deixa um erro inesperado (ex.: hipo do KV) virar crash bruto do worker.
+      return new Response(JSON.stringify({error:'server', detail:String(e && e.message || e)}), {status:500, headers:{'content-type':'application/json; charset=utf-8'}});
     }
-    return res;
   }
 };
 
@@ -232,20 +242,23 @@ async function handle(request, env){
         // Cadastro ausente durante o polling = veículo foi excluído do painel.
         return json({status:'deleted'});
       }
-      // Carro já cadastrado: grava SÓ o "visto por último" e a versão, nunca reescreve car:<id>.
-      await touchSeen(env, id, now);
-      await touchVer(env, id, vc, sdk, au);
-      // Estado de Device Owner reportado pelo carro (v16+). Só grava quando o carro informa.
-      if(typeof b.do === 'boolean') await putDo(env, id, b.do, '');
+      // Carro já cadastrado. As atualizações abaixo são BEST-EFFORT: se o KV estiver sem cota de
+      // escrita, elas falham em silêncio e o register ainda responde o status (lido do cadastro),
+      // pra o app NUNCA cair pra "Sem conexão" por causa de uma gravação.
+      try { await touchSeen(env, id, now); } catch(e){}
+      try { await touchVer(env, id, vc, sdk, au); } catch(e){}
+      try { if(typeof b.do === 'boolean') await touchDo(env, id, b.do); } catch(e){}  // grava só quando muda
       // Comando pendente do painel (ex.: setar Device Owner), entregue uma vez.
-      const cmd = await getCmd(env, id);
+      let cmd = null; try { cmd = await getCmd(env, id); } catch(e){}
       const out = {status:c.status, wipe: c.status==='revoked' ? !!c.wipe : false, plan: c.plan||'basico', grupo: c.grupo||'byd_simples'};
       if(cmd) out.cmd = cmd.type;
       // Canal de teste: só este carro recebe a versão de teste.
-      if(await getTestFlag(env, id)){
-        const tb = await testBuild(env);
-        if(tb){ out.tvc = tb.vc; out.turl = tb.url; }
-      }
+      try {
+        if(await getTestFlag(env, id)){
+          const tb = await testBuild(env);
+          if(tb){ out.tvc = tb.vc; out.turl = tb.url; }
+        }
+      } catch(e){}
       return json(out);
     }
 
