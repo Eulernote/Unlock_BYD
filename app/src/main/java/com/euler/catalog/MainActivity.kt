@@ -307,10 +307,38 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /** Testador de códigos de ADAS: com o app já projetado no cluster, toca cada um e vê qual esconde
+     *  o ADAS (o gráfico de carro/faixa). Me diga qual funcionou que eu fixo na sequência. */
+    private fun showAdasTestMenu() {
+        // code → rótulo (do dicionário do clusterdebug)
+        val candidates = listOf(
+            13 to "13 · fechar Adas",
+            58 to "58 · esconder navegação inteligente (SR)",
+            33 to "33 · 3D ADAS auto-refresh OFF",
+            55 to "55 · esconder faixa de pedestre",
+            53 to "53 · alternar 2D ADAS",
+            48 to "48 · ADAS debug OFF",
+            46 to "46 · fechar resultado self-learning",
+            32 to "32 · 3D ADAS auto-refresh ON",
+            12 to "12 · RESTAURAR Adas (voltar)"
+        )
+        val labels = candidates.map { it.second }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Testar códigos ADAS (projete antes)")
+            .setItems(labels) { _, which ->
+                val code = candidates[which].first
+                toast("Enviando código $code…")
+                Thread { val ok = ClusterCast.sendCode(applicationContext, code); runOnUiThread { toast("Código $code " + if (ok) "enviado ✓ — veja o cluster" else "falhou") } }.start()
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
+    }
+
     /** Menu escondido (5 toques na logo): ADB, diagnósticos e testes — fora da tela inicial. */
     private fun showHiddenToolsMenu() {
         val items = listOf(
             "⬆ Procurar atualização do Unlock BYD agora" to { checkUpdatesNow() },
+            "ADAS: testar códigos p/ esconder (Shark)" to { showAdasTestMenu() },
             "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
             "Início automático (religar / diagnóstico)" to { showAutostart() },
             "Diagnóstico do cluster" to {

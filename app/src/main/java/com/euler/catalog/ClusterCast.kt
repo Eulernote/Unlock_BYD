@@ -146,6 +146,9 @@ object ClusterCast {
         return r.ok && r.output.contains("Parcel(00000000", true)
     }
 
+    /** Envia um código avulso do AutoContainer (pra testar manualmente, ex.: achar o código de ADAS). */
+    fun sendCode(ctx: Context, code: Int): Boolean = callCode(ctx, code)
+
     /**
      * Decodifica a resposta crua do `service call` (hexdump do Parcel).
      * Palavra0 = código de exceção (0 = ok); se !=0, palavra1 = tamanho da msg e o resto é UTF-16LE.
