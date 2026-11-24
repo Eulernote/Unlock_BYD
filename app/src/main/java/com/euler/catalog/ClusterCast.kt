@@ -96,11 +96,16 @@ object ClusterCast {
             p.contains("waze") || p.contains("maps") || p.contains("navi") ->
                 if (is88) AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(18, h))
                 else AppGeom(base, 0, 0, 0, 0)
-            // Vídeo: no 8,8" L120 T54 R120 B73; nos demais, tela cheia.
+            // Vídeo: no 8,8" L120 T54 R120 B73; na Shark (1920×720) molda o canto do ADAS; demais tela cheia.
             p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
             p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") ->
-                if (is88) AppGeom(base, scaleX(120, w), scaleY(54, h), scaleX(120, w), scaleY(73, h))
-                else AppGeom(base, 0, 0, 0, 0)
+                when {
+                    is88 -> AppGeom(base, scaleX(120, w), scaleY(54, h), scaleX(120, w), scaleY(73, h))
+                    // Shark / DiLink 3.0 (1920×720): libera o canto inferior-direito onde fica o ADAS.
+                    // 1º chute — ajustar com medida do redimensionador. R700 → vídeo até x≈1220; B150 → até y≈570.
+                    w in 1850..1980 && h in 680..760 -> AppGeom(base, 0, 0, 700, 150)
+                    else -> AppGeom(base, 0, 0, 0, 0)
+                }
             else -> AppGeom(base, 0, 0, 0, 0)   // resto: tela cheia
         }
     }
