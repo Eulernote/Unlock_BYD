@@ -29,11 +29,13 @@ object ClusterCast {
     // ON = 16 → 35 → 46 (original robusta): 16 liga tela cheia, 35 (Di4.0) FORÇA a criação do display
     // fission_bg, 46 finaliza. Confirmado pela "reativação completa": só esta recria a 2ª tela de forma
     // confiável (o 0→16 parava de criar o display depois que o serviço entrava em certos estados).
-    private val ON_SEQUENCE = listOf(16, 35, 46)
-    // Meia-tela (17) + 35/46 pra também forçar a criação.
-    private val ON_SEQUENCE_HALF = listOf(17, 35, 46)
-    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → 18 → 0.
-    private val OFF_SEQUENCE = listOf(46, 18, 0)
+    // 13 = fecha o ADAS (gráfico de carro/faixa que fica por cima da projeção, ex.: Shark). No-op em
+    // carros sem ADAS. 12 = mostra o ADAS de novo (na sequência de desligar).
+    private val ON_SEQUENCE = listOf(16, 35, 46, 13)
+    // Meia-tela (17) + 35/46 pra também forçar a criação + 13 (esconde ADAS).
+    private val ON_SEQUENCE_HALF = listOf(17, 35, 46, 13)
+    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → 18 → 0 → 12 (restaura o ADAS).
+    private val OFF_SEQUENCE = listOf(46, 18, 0, 12)
     // Modo de projeção atual (false = tela cheia / true = meia-tela). Afeta o próximo openSurface.
     @Volatile var halfScreen: Boolean = false
 
