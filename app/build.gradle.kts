@@ -20,8 +20,8 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 52
-        versionName = "5.9"
+        versionCode = 53
+        versionName = "6.0"
     }
 
     buildTypes {

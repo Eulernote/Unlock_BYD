@@ -436,7 +436,15 @@ object ClusterCast {
         if (lastPkg.isNotEmpty()) {
             moveStackToDisplay(ctx, lastPkg, 0)
             val comp = lastComp.ifEmpty { resolveLaunchComponent(ctx, lastPkg) ?: lastPkg }
-            val r = AdbShell.run(ctx, "am start --display 0 -n $comp 2>&1", 10000)
+            // YouTube (e vídeo em geral) volta preso em retrato se a gente só relançar a task antiga
+            // (ela guarda o estado de orientação do cluster). -S força parar antes de abrir, então sobe
+            // limpo em paisagem na central — como quando o usuário abre o app normalmente. Waze NÃO leva
+            // -S (não dá pra matar navegação no meio).
+            val lp = lastPkg.lowercase()
+            val isVideo = lp.contains("youtube") || lp.contains("video") || lp.contains("netflix") ||
+                lp.contains("player") || lp.contains("vlc") || lp.contains("mxtech")
+            val startCmd = if (isVideo) "am start -S --display 0 -n $comp 2>&1" else "am start --display 0 -n $comp 2>&1"
+            val r = AdbShell.run(ctx, startCmd, 10000)
             moved = !(r.output.contains("Error", true) || r.output.contains("Exception", true))
         }
         releaseSurface(ctx)
