@@ -29,13 +29,13 @@ object ClusterCast {
     // ON = 16 → 35 → 46 (original robusta): 16 liga tela cheia, 35 (Di4.0) FORÇA a criação do display
     // fission_bg, 46 finaliza. Confirmado pela "reativação completa": só esta recria a 2ª tela de forma
     // confiável (o 0→16 parava de criar o display depois que o serviço entrava em certos estados).
-    // 13 = fecha o ADAS (gráfico de carro/faixa que fica por cima da projeção, ex.: Shark). No-op em
-    // carros sem ADAS. 12 = mostra o ADAS de novo (na sequência de desligar).
-    private val ON_SEQUENCE = listOf(16, 35, 46, 13)
-    // Meia-tela (17) + 35/46 pra também forçar a criação + 13 (esconde ADAS).
-    private val ON_SEQUENCE_HALF = listOf(17, 35, 46, 13)
-    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → 18 → 0 → 12 (restaura o ADAS).
-    private val OFF_SEQUENCE = listOf(46, 18, 0, 12)
+    // OBS ADAS: na Shark (DiLink 3.0 / 6125f) os códigos de conteúdo (12/13/32/33/...) são aceitos pelo
+    // serviço mas ignorados — o ADAS é uma camada nativa composta por cima, não dá pra esconder por comando.
+    private val ON_SEQUENCE = listOf(16, 35, 46)
+    // Meia-tela (17) + 35/46 pra também forçar a criação.
+    private val ON_SEQUENCE_HALF = listOf(17, 35, 46)
+    // Sequência de DESLIGAR (volta o painel original da BYD): 46 → 18 → 0.
+    private val OFF_SEQUENCE = listOf(46, 18, 0)
     // Modo de projeção atual (false = tela cheia / true = meia-tela). Afeta o próximo openSurface.
     @Volatile var halfScreen: Boolean = false
 
@@ -87,14 +87,20 @@ object ClusterCast {
     private fun geomFor(pkg: String, w: Int, h: Int): AppGeom {
         val base = baseDensity(h)
         val p = pkg.lowercase()
+        // As margens foram medidas à mão SÓ no cluster 1280×480 (DiLink 4.0 / 8,8").
+        // Em clusters de outra resolução (ex.: Shark 1920×720 DiLink 3.0) não há calibração manual,
+        // então vídeo vai em tela cheia (era o que escalava errado e deixava o YouTube numa janelinha).
+        val is88 = (w == 1280 && h == 480)
         return when {
-            // Waze/mapas: L105 T0 R118 B48 — base mais baixa (Waze desce), carro ainda visível.
+            // Waze/mapas: L105 T0 R118 B18 — base mais baixa (Waze desce), carro ainda visível.
             p.contains("waze") || p.contains("maps") || p.contains("navi") ->
-                AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(18, h))
-            // Vídeo: L120 T54 R120 B73 (área ~1040×353).
+                if (is88) AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(18, h))
+                else AppGeom(base, 0, 0, 0, 0)
+            // Vídeo: no 8,8" L120 T54 R120 B73; nos demais, tela cheia.
             p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
             p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") ->
-                AppGeom(base, scaleX(120, w), scaleY(54, h), scaleX(120, w), scaleY(73, h))
+                if (is88) AppGeom(base, scaleX(120, w), scaleY(54, h), scaleX(120, w), scaleY(73, h))
+                else AppGeom(base, 0, 0, 0, 0)
             else -> AppGeom(base, 0, 0, 0, 0)   // resto: tela cheia
         }
     }
