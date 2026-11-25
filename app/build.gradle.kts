@@ -20,11 +20,23 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 56
-        versionName = "6.3"
+        versionCode = 57
+        versionName = "6.4"
     }
 
     buildTypes {
+        getByName("debug") {
+            // Ofuscacao (R8): embaralha com.euler.catalog, preserva dadb/okio/WorkManager (ver
+            // proguard-rules.pro). A CI gera assembleDebug com esta keystore, entao o APK de
+            // producao tambem fica ofuscado. proguard-android.txt = ofuscar/encolher SEM otimizacao
+            // agressiva (mais seguro p/ ADB/reflexao).
+            isMinifyEnabled = true
+            isShrinkResources = false
+            proguardFiles(
+                getDefaultProguardFile("proguard-android.txt"),
+                "proguard-rules.pro"
+            )
+        }
         getByName("release") {
             isMinifyEnabled = false
         }
