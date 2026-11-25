@@ -425,15 +425,13 @@ object ClusterCast {
         val geom = geomFor(pkg, if (prof.found && prof.w > 0) prof.w else 1280, if (prof.found && prof.h > 0) prof.h else 480)
         applyGeom(ctx, id, prof.w, prof.h, geom)
 
-        // Move a stack e relança o launcher no display do cluster (o que de fato renderiza).
+        // Move a stack e relança no display do cluster (o que de fato renderiza).
+        // IMPORTANTE: NUNCA cold-start (-S) na ida — o vídeo tem que continuar tocando (o usuário
+        // escolhe o vídeo na central, que é touch, e só então joga pro cluster). A virada pra paisagem
+        // vem da densidade tablet (sw≥600dp) aplicada acima: ao mudar de display, o YouTube recebe a
+        // nova config e relayouta em paisagem, sem reiniciar.
         moveStackToDisplay(ctx, pkg, id)
-        // Vídeo (YouTube): sobe LIMPO (-S) pra inicializar lendo o cluster já como paisagem (densidade
-        // tablet aplicada acima), em vez de herdar o estado retrato que ele tinha na central.
-        val lp = pkg.lowercase()
-        val isVideo = lp.contains("youtube") || lp.contains("video") || lp.contains("netflix") ||
-            lp.contains("player") || lp.contains("vlc") || lp.contains("mxtech") || lp.contains("iptv")
-        val startFlag = if (isVideo) "-S " else ""
-        val r = AdbShell.run(ctx, "am start $startFlag--display $id -n $comp 2>&1", 10000)
+        val r = AdbShell.run(ctx, "am start --display $id -n $comp 2>&1", 10000)
         if (r.output.contains("Error", true) || r.output.contains("Exception", true)) {
             resetGeom(ctx, id); releaseSurface(ctx)
             return Result(false, "falhei ao abrir no cluster: ${r.output.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: r.reason}")
