@@ -20,8 +20,8 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 57
-        versionName = "6.4"
+        versionCode = 58
+        versionName = "6.5"
     }
 
     buildTypes {
@@ -30,6 +30,10 @@ android {
             // proguard-rules.pro). A CI gera assembleDebug com esta keystore, entao o APK de
             // producao tambem fica ofuscado. proguard-android.txt = ofuscar/encolher SEM otimizacao
             // agressiva (mais seguro p/ ADB/reflexao).
+            // IMPORTANTE: o AGP novo NAO ofusca build 'debuggable'. Entao tiramos a flag de debug
+            // (continua assinado com a mesma keystore -> os carros aceitam a atualizacao). Em producao
+            // nem faz sentido ser debuggable.
+            isDebuggable = false
             isMinifyEnabled = true
             isShrinkResources = false
             proguardFiles(
