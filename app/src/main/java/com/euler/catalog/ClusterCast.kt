@@ -97,14 +97,22 @@ object ClusterCast {
                 if (is88) AppGeom((base - 10).coerceAtLeast(140), scaleX(105, w), scaleY(0, h), scaleX(118, w), scaleY(18, h))
                 else AppGeom(base, 0, 0, 0, 0)
             // Vídeo: no 8,8" L120 T54 R120 B73; na Shark (1920×720) molda o canto do ADAS; demais tela cheia.
+            // Além disso força densidade "tablet" (smallestWidth da área útil ≥ ~600dp) pro YouTube abrir
+            // em PAISAGEM. No cluster 1920×720 a densidade 220 dava sw=523dp → YouTube ia pro layout de
+            // celular (retrato) e bugava a projeção. 8,8" mantém a densidade calibrada.
             p.contains("youtube") || p.contains("video") || p.contains("player") || p.contains("netflix") ||
             p.contains("tv") || p.contains("iptv") || p.contains("mxtech") || p.contains("vlc") ->
                 when {
                     is88 -> AppGeom(base, scaleX(120, w), scaleY(54, h), scaleX(120, w), scaleY(73, h))
-                    // Shark / DiLink 3.0 (1920×720): libera o canto inferior-direito onde fica o ADAS.
-                    // 1º chute — ajustar com medida do redimensionador. R700 → vídeo até x≈1220; B150 → até y≈570.
-                    w in 1850..1980 && h in 680..760 -> AppGeom(base, 0, 0, 700, 150)
-                    else -> AppGeom(base, 0, 0, 0, 0)
+                    else -> {
+                        // insets: Shark (1920×720) libera o canto do ADAS; demais tela cheia.
+                        val carve = w in 1850..1980 && h in 680..760
+                        val l = 0; val t = 0; val r = if (carve) 700 else 0; val b = if (carve) 150 else 0
+                        // densidade a partir da ÁREA ÚTIL (após o corte) pra sw ≥ ~600dp → paisagem.
+                        val cw = w - l - r; val ch = h - t - b
+                        val dens = (minOf(cw, ch) * 160 / 620).coerceIn(120, 200)
+                        AppGeom(dens, l, t, r, b)
+                    }
                 }
             else -> AppGeom(base, 0, 0, 0, 0)   // resto: tela cheia
         }
@@ -419,7 +427,13 @@ object ClusterCast {
 
         // Move a stack e relança o launcher no display do cluster (o que de fato renderiza).
         moveStackToDisplay(ctx, pkg, id)
-        val r = AdbShell.run(ctx, "am start --display $id -n $comp 2>&1", 10000)
+        // Vídeo (YouTube): sobe LIMPO (-S) pra inicializar lendo o cluster já como paisagem (densidade
+        // tablet aplicada acima), em vez de herdar o estado retrato que ele tinha na central.
+        val lp = pkg.lowercase()
+        val isVideo = lp.contains("youtube") || lp.contains("video") || lp.contains("netflix") ||
+            lp.contains("player") || lp.contains("vlc") || lp.contains("mxtech") || lp.contains("iptv")
+        val startFlag = if (isVideo) "-S " else ""
+        val r = AdbShell.run(ctx, "am start $startFlag--display $id -n $comp 2>&1", 10000)
         if (r.output.contains("Error", true) || r.output.contains("Exception", true)) {
             resetGeom(ctx, id); releaseSurface(ctx)
             return Result(false, "falhei ao abrir no cluster: ${r.output.lineSequence().firstOrNull { it.isNotBlank() }?.take(120) ?: r.reason}")
