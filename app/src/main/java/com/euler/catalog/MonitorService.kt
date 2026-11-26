@@ -46,7 +46,10 @@ class MonitorService : Service() {
     }
 
     private val ui = Handler(Looper.getMainLooper())
-    private val http = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).connectTimeout(15, TimeUnit.SECONDS).build()
+    // pingInterval: se a rede trocar/cair e o servidor não responder ao ping, o OkHttp derruba a conexão e reconectamos.
+    private val http = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).connectTimeout(15, TimeUnit.SECONDS).pingInterval(20, TimeUnit.SECONDS).build()
+    private var netCb: android.net.ConnectivityManager.NetworkCallback? = null
+    @Volatile private var lastPong = 0L
     private var ws: WebSocket? = null
     private var backoff = 5_000L
     private var running = false
@@ -58,7 +61,20 @@ class MonitorService : Service() {
         startForegroundSafe()
         running = true
         connect()
-        ui.postDelayed(pinger, 50_000)
+        ui.postDelayed(pinger, 30_000)
+        // Trocou de rede (Wi-Fi ↔ 4G ↔ VPN)? A conexão antiga morre em silêncio: reconecta na hora.
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            val cb = object : android.net.ConnectivityManager.NetworkCallback() {
+                private var first = true
+                override fun onAvailable(network: android.net.Network) {
+                    if (first) { first = false; return }
+                    ui.post { reconnectNow("rede mudou") }
+                }
+            }
+            if (Build.VERSION.SDK_INT >= 24) cm.registerDefaultNetworkCallback(cb)
+            netCb = cb
+        } catch (e: Exception) { Log.w(TAG, "netcb: ${e.message}") }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -69,6 +85,7 @@ class MonitorService : Service() {
     override fun onDestroy() {
         running = false
         ui.removeCallbacksAndMessages(null)
+        try { netCb?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).unregisterNetworkCallback(it) } } catch (_: Exception) {}
         try { ws?.close(1000, "off") } catch (_: Exception) {}
         ws = null; connected = false
         LiveCam.stopAll()
@@ -78,7 +95,9 @@ class MonitorService : Service() {
     private val pinger = object : Runnable {
         override fun run() {
             try { ws?.send("ping") } catch (_: Exception) {}
-            if (running) ui.postDelayed(this, 50_000)
+            // Sem "pong" do servidor há 75 s = conexão morta (o servidor responde todo "ping" na hora).
+            if (ws != null && lastPong > 0 && System.currentTimeMillis() - lastPong > 75_000) reconnectNow("sem resposta do servidor")
+            if (running) ui.postDelayed(this, 30_000)
         }
     }
 
@@ -87,10 +106,11 @@ class MonitorService : Service() {
         val url = Store.SERVER.replaceFirst("https://", "wss://") + "/ws/car?id=" + Store.carId(this)
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                connected = true; backoff = 5_000L
+                connected = true; backoff = 5_000L; lastPong = System.currentTimeMillis()
                 Log.i(TAG, "conectado ao hub")
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
+                lastPong = System.currentTimeMillis()
                 if (text == "pong") return
                 val m = try { JSONObject(text) } catch (_: Exception) { return }
                 val v = m.optString("v", "")
@@ -109,6 +129,17 @@ class MonitorService : Service() {
                 if (response?.code == 403) backoff = 10 * 60_000L
             }
         })
+    }
+
+    private fun reconnectNow(why: String) {
+        if (!running) return
+        Log.w(TAG, "reconectando: $why")
+        val old = ws
+        ws = null; connected = false
+        try { old?.cancel() } catch (_: Exception) {}
+        LiveCam.stopAll()
+        backoff = 5_000L
+        ui.postDelayed({ if (running && ws == null) connect() }, 1500)
     }
 
     private fun dropped(w: WebSocket, why: String) {
