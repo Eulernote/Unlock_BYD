@@ -255,7 +255,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-6';
+const V = 'ubyd-c-7';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -405,19 +405,19 @@ function toggleLive(i){if(LIVE&&LIVE.i===i){stopLive('Transmissão encerrada.');
 function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};LIVE=L;
  $('pb-'+i).textContent='■ Parar';$('inf-'+i).textContent='';ov(i,'Conectando ao carro…');
  var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/c/ws?car='+encodeURIComponent(c.id)+'&t='+encodeURIComponent(T));L.ws=ws;
- var start=function(){try{ws.send(JSON.stringify({t:'start',cam:L.want||'auto',size:($('sz-'+i)||{}).value||'auto',codec:($('cd-'+i)||{}).value||'auto'}));}catch(e){}};
+ var start=function(){clearTimeout(L.wd);L.wd=setTimeout(function(){if(L.done||L.got)return;L.tries=(L.tries||0)+1;if(L.tries<2){ov(i,'O carro está demorando para responder… tentando de novo');start();}else ov(i,'O carro não respondeu. Ele pode ter trocado de rede (Wi-Fi/dados) e está reconectando: toque em Parar e tente de novo em 1 minuto.');},12000);try{ws.send(JSON.stringify({t:'start',cam:L.want||'auto',size:($('sz-'+i)||{}).value||'auto',codec:($('cd-'+i)||{}).value||'auto'}));}catch(e){}};
  L.stats=setInterval(function(){statsTick(L);},2000);
  ws.onmessage=function(e){if(L.done)return;var m;try{m=JSON.parse(e.data);}catch(x){return;}
   if(m.t==='hello'){L.ice=m.ice||[];if(m.online){ov(i,'Ligando a câmera…');start();}else ov(i,'O carro está desligado ou sem internet. Pode esperar aqui: quando ele conectar, a imagem começa.');}
   else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
   else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
-  else if(m.t==='offer'){onOffer(L,m.sdp);}
+  else if(m.t==='offer'){L.got=true;clearTimeout(L.wd);onOffer(L,m.sdp);}
   else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
    var cs=(m.cams||[]).filter(function(k){return DIAG||k.indexOf('id:')!==0;});L.cams=cs;
    $('cams-'+i).innerHTML=cs.length<2&&!DIAG?'':cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+')">'+camName(k)+'</button>';}).join('');
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
   else if(m.t==='stats'){L.car=m;}
-  else if(m.t==='error'){ov(i,'O carro avisou: '+(m.msg||'erro'));}
+  else if(m.t==='error'){L.got=true;clearTimeout(L.wd);ov(i,'O carro avisou: '+(m.msg||'erro'));}
  };
  ws.onclose=function(ev){if(!L.done)stopLive(ev.code===1006?'Sem conexão com o servidor. Toque em Ver ao vivo para tentar de novo.':'Conexão encerrada. Toque em Ver ao vivo para tentar de novo.');};
  L.timer=setTimeout(function(){stopLive('Sessão encerrada após 5 minutos (para economizar dados). Toque para ver de novo.');},5*60*1000);
@@ -442,7 +442,7 @@ function statsTick(L){var el=$('sta-'+L.i);if(!el)return;var c=L.car;
    t=' — Celular: '+(s.framesPerSecond||0)+' q/s'+(s.frameWidth?(', '+s.frameWidth+'×'+s.frameHeight):'')+', '+kb+' kbps';}});el.textContent=car+t;}).catch(function(){});}
 function restartLive(i){if(LIVE&&LIVE.i===i){stopLive();startLive(i);}}
 function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}var v=$('vid-'+L.i);if(v)v.srcObject=null;}
-function stopLive(msg){var L=LIVE;if(!L)return;L.done=true;LIVE=null;clearTimeout(L.timer);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
+function stopLive(msg){var L=LIVE;if(!L)return;L.done=true;LIVE=null;clearTimeout(L.timer);clearTimeout(L.wd);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
  try{L.ws.send(JSON.stringify({t:'stop'}));}catch(e){}try{L.ws.close();}catch(e){}dropPc(L);
  var b=$('pb-'+L.i);if(b)b.textContent='▶ Ver ao vivo';ov(L.i,msg||'📷 Toque em “Ver ao vivo”');}
 document.addEventListener('visibilitychange',function(){if(document.hidden&&LIVE)stopLive('Pausado ao sair do app. Toque para ver de novo.');});
