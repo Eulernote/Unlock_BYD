@@ -22,6 +22,8 @@ import java.util.zip.ZipFile
  *   "download" (padrão) -> Download/<pasta>/<nome>
  *   "obb"  -> Android/obb/<pacote>/   (arquivo .obb, ou .zip que é descompactado lá)
  *   "data" -> Android/data/<pacote>/  (.zip com a pasta do jogo, descompactado lá)
+ *   "download_zip" -> .zip descompactado em Download/<pasta>/ (se o zip tiver uma única pasta por fora,
+ *                     ela é "aberta": o conteúdo dela vai direto para Download/<pasta>/)
  * Regra por Android:
  *   Android 10 (ou anterior): obb e data vão direto para a pasta certa.
  *   Android 11+: obb tenta direto (instaladores costumam ter acesso); data nunca dá direto.
@@ -56,7 +58,8 @@ object Extras {
             val nome = e.optString("nome").trim().ifEmpty { Uri.decode(url.substringAfterLast('/').substringBefore('?')) }
             val pasta = e.optString("pasta").trim().trim('/')
             val destino = e.optString("destino", "download").trim().lowercase().ifEmpty { "download" }
-            if (url.isNotEmpty() && nome.isNotEmpty() && !nome.contains("/") && !pasta.contains("..")) out.add(Extra(url, pasta, nome, destino))
+            val pastaOk = if (destino == "download_zip" && pasta.isEmpty()) nome.substringBeforeLast('.').trim() else pasta
+            if (url.isNotEmpty() && nome.isNotEmpty() && !nome.contains("/") && !pastaOk.contains("..")) out.add(Extra(url, pastaOk, nome, destino))
         }
         return out
     }
@@ -74,6 +77,10 @@ object Extras {
             val r = when (ex.destino) {
                 "obb" -> special(ctx, ex, pkg, "obb", cancel, report)
                 "data" -> special(ctx, ex, pkg, "data", cancel, report)
+                "download_zip" -> Result(zipTo(ctx, ex, pkg, null, cancel, report, layout = ::downloadZipLayout) { rel, inp ->
+                    val dir = rel.substringBeforeLast('/', "")
+                    writeToDownloads(ctx, downloadsRel(ex.pasta) + (if (dir.isNotEmpty()) "$dir/" else ""), rel.substringAfterLast('/'), inp)
+                })
                 else -> Result(toDownloads(ctx, ex.url, downloadsRel(ex.pasta), ex.nome, cancel) { p, b -> report(progressText("Baixando", ex.nome, p, b)) })
             }
             if (!r.ok && r.erro == null) r.copy(erro = lastError) else r
@@ -151,7 +158,17 @@ object Extras {
     }
 
     /** Baixa o zip para o cache, descompacta entrada por entrada com write(caminho relativo, conteúdo) e apaga o zip. */
-    private fun zipTo(ctx: Context, ex: Extra, pkg: String, root: File?, cancel: () -> Boolean, report: (String) -> Unit, write: (String, InputStream) -> Boolean): Boolean {
+    /** Download/<pasta>: mantém a estrutura do zip; se tudo estiver dentro de UMA pasta, abre essa pasta. */
+    private fun downloadZipLayout(names: List<String>, @Suppress("UNUSED_PARAMETER") pkg: String): Pair<(String) -> String?, String?> {
+        fun norm(n: String) = n.replace('\\', '/').trimStart('/')
+        val clean = names.map { norm(it) }.filter { !it.startsWith("__MACOSX/") && !it.endsWith(".DS_Store") }
+        val tops = clean.map { it.substringBefore('/') }.toSet()
+        val wrap = if (tops.size == 1 && clean.all { it.contains('/') }) tops.first() + "/" else ""
+        return Pair({ n: String -> val x = norm(n); if (x.startsWith("__MACOSX/") || x.endsWith(".DS_Store") || x.isEmpty()) null else x.removePrefix(wrap).ifEmpty { null } }, null)
+    }
+
+    private fun zipTo(ctx: Context, ex: Extra, pkg: String, root: File?, cancel: () -> Boolean, report: (String) -> Unit,
+                      layout: (List<String>, String) -> Pair<(String) -> String?, String?> = ::zipLayout, write: (String, InputStream) -> Boolean): Boolean {
         val tmp = File(ctx.cacheDir, "x_" + ex.nome.hashCode() + ".zip")
         var keepPart = false
         try {
@@ -162,7 +179,7 @@ object Extras {
             if (!okd) { keepPart = true; return false }   // mantém o pedaço baixado para retomar na próxima tentativa
             ZipFile(tmp).use { zf ->
                 val entries = zf.entries().toList().filter { !it.isDirectory && !it.name.contains("..") }
-                val (map, wrapper) = zipLayout(entries.map { it.name }, pkg)
+                val (map, wrapper) = layout(entries.map { it.name }, pkg)
                 // Limpa a pasta "embrulho" que uma instalação antiga possa ter deixado dentro da pasta do jogo (ex.: Android/obb/com.jogo/OBB DFL).
                 if (root != null && wrapper != null && wrapper != pkg) try { File(root, wrapper).deleteRecursively() } catch (_: Exception) {}
                 val total = entries.sumOf { maxOf(it.size, 0L) }.coerceAtLeast(1L); var done = 0L; var lastPct = -1
@@ -199,6 +216,7 @@ object Extras {
 
     /** Apaga o extra (só cópias feitas por este app na pasta Download). OBB/data o Android apaga junto com o app. */
     fun remove(ctx: Context, ex: Extra) {
+        if (ex.destino == "download_zip") { removeExtractedFolder(ctx, ex.pasta); return }
         if (ex.destino != "download") return
         if (Build.VERSION.SDK_INT >= 29) {
             try {
@@ -209,6 +227,20 @@ object Extras {
             val dir = legacyDir(downloadsRel(ex.pasta))
             File(dir, ex.nome).delete()
             if (ex.pasta.isNotEmpty()) dir.delete()   // só apaga a pasta se ficou vazia
+        }
+    }
+
+    /** Apaga o que extraímos em Download/<pasta>/ (só arquivos criados por este app; nunca a pasta Download inteira). */
+    private fun removeExtractedFolder(ctx: Context, pasta: String) {
+        if (pasta.isBlank()) return
+        val rel = downloadsRel(pasta)
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                ctx.contentResolver.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?", arrayOf("$rel%"))
+            } catch (_: Exception) {}
+        } else {
+            try { legacyDir(rel).deleteRecursively() } catch (_: Exception) {}
         }
     }
 
