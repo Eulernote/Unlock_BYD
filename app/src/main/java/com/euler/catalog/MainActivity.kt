@@ -121,7 +121,20 @@ class MainActivity : Activity() {
             if (!Store.isOnboarded(this)) { swipe.isRefreshing = false; return@setOnRefreshListener }
             Thread {
                 val r = Store.register(this)
-                runOnUiThread { currentPlan = r.plan; currentGrupo = r.grupo; swipe.isRefreshing = false; applyStatus(r.status, r.wipe, true) }
+                // Puxar a tela também procura atualização do próprio Unlock BYD (canal de teste ou produção).
+                val own = ownVersionCode()
+                val sv = try { Store.selfVersion() } catch (e: Exception) { Pair(0, "") }
+                var tgtVc = 0; var tgtUrl = ""
+                if (r.testVc > own && r.testUrl.isNotEmpty()) { tgtVc = r.testVc; tgtUrl = r.testUrl }
+                else if (sv.first > own && sv.second.isNotEmpty()) { tgtVc = sv.first; tgtUrl = sv.second }
+                runOnUiThread {
+                    currentPlan = r.plan; currentGrupo = r.grupo; swipe.isRefreshing = false; applyStatus(r.status, r.wipe, true)
+                    if (tgtVc > own && tgtUrl.isNotEmpty() && r.status == "active") {
+                        toast("Atualização do Unlock BYD encontrada (v$tgtVc) — instalando…")
+                        selfLatestVc = maxOf(selfLatestVc, tgtVc); selfUrl = tgtUrl
+                        enqueue(AppEntry("Unlock BYD", packageName, tgtUrl, "", ""))
+                    }
+                }
             }.start()
         }
         setContentView(swipe)
