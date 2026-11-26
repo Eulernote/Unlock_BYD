@@ -129,6 +129,26 @@ object AdbShell {
         return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
     }
 
+    /**
+     * O serviço está marcado como ligado nas configurações mas o Android não o reconectou (comum logo
+     * após uma atualização): tira e recoloca na lista, o que força o sistema a reconectar.
+     */
+    fun rebindAccessibilityService(ctx: Context): Result {
+        val comp = ComponentName(ctx, AutostartService::class.java).flattenToString()
+        val short = ComponentName(ctx, AutostartService::class.java).flattenToShortString()
+        val cmds = listOf(
+            "CUR=\$(settings get secure enabled_accessibility_services); [ \"\$CUR\" = null ] && CUR=",
+            "REST=\$(echo \"\$CUR\" | tr ':' '\\n' | grep -v -x -e '$comp' -e '$short' | grep -v '^\$' | paste -sd ':' -)",
+            "settings put secure enabled_accessibility_services \"\$REST\"",
+            "sleep 1",
+            "settings put secure enabled_accessibility_services \"\${REST:+\$REST:}$comp\"",
+            "settings put secure accessibility_enabled 1",
+            "echo UBYD_OK"
+        )
+        val r = run(ctx, cmds.joinToString(" ; "), 20000)
+        return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
+    }
+
     /** Abre a tela de início automático da BYD pelo shell (fallback quando o Context não consegue). */
     fun openAutostartPage(ctx: Context): Result {
         val cmds = listOf(

@@ -51,7 +51,8 @@ class AutostartService : AccessibilityService() {
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
         val pkg = event.packageName?.toString() ?: return
         if (AUTOSTART_PKGS.none { pkg.startsWith(it) }) return
-        try { tryToggle() } catch (_: Exception) {}
+        if (lastResult == "(ainda não rodou)") lastResult = "tela da BYD aberta ($pkg), procurando o Unlock BYD…"
+        try { tryToggle() } catch (e: Exception) { lastResult = "erro ao ler a tela: ${e.javaClass.simpleName} ${e.message}" }
     }
 
     override fun onInterrupt() {}
@@ -226,6 +227,17 @@ class AutostartService : AccessibilityService() {
 
         /** Abre a tela de início automático da BYD e arma o serviço pra ligar o botão da nossa linha. */
         fun requestEnable(ctx: Context) {
+            // Marcado como ligado, mas o sistema não reconectou o serviço (ex.: logo após atualizar):
+            // sem isso a tela da BYD abre e ninguém liga o botão.
+            if (instance == null && isEnabled(ctx)) {
+                Thread {
+                    AdbShell.rebindAccessibilityService(ctx)
+                    try { Thread.sleep(2500) } catch (_: Exception) {}
+                    armed = true; instance?.attempts = 0
+                    if (!openAutostartUi(ctx)) AdbShell.openAutostartPage(ctx)
+                }.start()
+                return
+            }
             armed = true
             instance?.attempts = 0
             if (!openAutostartUi(ctx)) Thread { AdbShell.openAutostartPage(ctx) }.start()

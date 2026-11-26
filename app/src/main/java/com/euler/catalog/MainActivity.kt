@@ -1219,6 +1219,7 @@ class MainActivity : Activity() {
                     val sb = StringBuilder()
                     sb.append("Serviço de acessibilidade ligado: ")
                       .append(if (AutostartService.isEnabled(applicationContext)) "sim" else "não").append("\n")
+                    sb.append("Serviço conectado pelo sistema: ").append(if (AutostartService.instance != null) "sim" else "NÃO (vou reconectar ao reativar)").append("\n")
                     sb.append("Última ação do serviço: ").append(AutostartService.lastResult).append("\n\n")
                     sb.append("Estado do início automático:\n").append(AdbShell.autostartState(applicationContext)).append("\n")
                     if (AutostartService.lastDump.isNotBlank())
