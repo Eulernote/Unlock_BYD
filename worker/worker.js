@@ -7,6 +7,8 @@
  *  Aba "Arquivos" (subir/apagar no R2): só FILE_ADMINS.
  */
 
+import { handleClient, handleMonitorStaff } from './cliente.js';
+
 const USERS = ['euler', 'luis', 'richard'];
 const FILE_ADMINS = ['euler', 'luis'];
 const PLANS = ['basico', 'intermediario', 'premium'];
@@ -200,6 +202,11 @@ async function handle(request, env){
 
     if(!env.SECRET) return json({error:'SECRET não configurado no Worker'}, 500);
 
+    // App do cliente (PWA em /c): login próprio, separado do painel. Ver worker/cliente.js.
+    const H = {json, hmacHex, hashPw, getCar, putCar, getSeen, fmt};
+    const cres = await handleClient(request, env, p, H);
+    if(cres) return cres;
+
     // painel
     if(p === '/' || p === '/index.html') return new Response(HTML, {headers:{'content-type':'text/html; charset=utf-8'}});
 
@@ -303,6 +310,7 @@ async function handle(request, env){
 
     // --- endpoints do painel (exigem login) ---
     const user = await authUser(env, request);
+    { const mres = await handleMonitorStaff(request, env, p, user, H); if(mres) return mres; }
 
     if(p === '/api/cars' && request.method === 'GET'){
       if(!user) return json({error:'unauth'}, 401);
@@ -752,6 +760,7 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  h+='<div style="font-size:12.5px;margin-bottom:8px;color:var(--faint)">Religa o início automático do app (abre a tela da BYD e liga o botão sozinho). Só funciona em carro já na versão nova.</div>';
  if(c.cmdPending==='enable-autostart') h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px">Comando enviado — aguardando o carro religar o início automático.</div>';
  else h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border)" onclick="enableAutostart(\\''+c.id+'\\')">Reativar início automático</button>';
+ h+='<div class="sec-title" style="margin:20px 0 6px">Monitoramento <span style="color:var(--faint);font-weight:400">· app do cliente</span></div><div id="d-mon" style="font-size:12.5px;color:var(--faint)">Carregando…</div>';
  h+='<div class="sec-title" style="margin:20px 0 6px">Canal de teste</div>';
  h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.test?('<span style="color:#f5a623;font-weight:650">● Recebe a versão de teste</span>'+(testLatest?(' <span style="color:var(--faint)">(v'+testLatest+(c.vc?(c.vc>=testLatest?' — já atualizado':' — carro na v'+c.vc):'')+')</span>'):'')):'<span style="color:var(--faint)">usa a versão normal</span>')+'</div>';
  if(c.test) h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="setTest(\\''+c.id+'\\',false)">Tirar do canal de teste</button>';
@@ -763,7 +772,30 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  var log=(c.log||[]).slice().reverse();var dl=document.getElementById('d-log');
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}
  else{dl.innerHTML=log.map(function(e){var col=userColor(e.by);return '<div class="logrow"><span class="logact '+e.cls+'">'+e.acao+'</span><span class="logby">por <span style="color:'+col+';font-weight:650">'+e.by+'</span></span><span class="logwhen">'+e.when+'</span></div>';}).join('');}
- document.getElementById('detail').style.display='flex';planPreview();}
+ document.getElementById('detail').style.display='flex';planPreview();loadMon(c.id);}
+var monCodeTimer=null;
+function loadMon(id){var el=document.getElementById('d-mon');if(!el)return;
+ api('/api/monitor?id='+encodeURIComponent(id)).then(function(m){var h='';
+  h+='<div style="margin-bottom:8px">'+(m.on?'<span style="color:#27c08a;font-weight:650">● Liberado</span> <span style="color:var(--faint)">· o cliente pode vincular o celular</span>':'<span style="color:var(--faint)">○ Desligado</span>')+'</div>';
+  if(m.on){
+   h+='<div id="mon-code"></div><button class="btn btn-approve" style="width:100%;margin-bottom:8px" onclick="genCode(\\''+id+'\\')">Gerar código de vínculo</button>';
+   h+='<div style="margin:6px 0 4px;color:var(--muted)">Celulares vinculados ('+m.clients.length+')</div>';
+   if(!m.clients.length)h+='<div style="color:var(--faint);margin-bottom:8px">Nenhum ainda.</div>';
+   m.clients.forEach(function(u){h+='<div class="logrow"><span class="logby" style="color:var(--text)">'+esc(u)+'</span><a href="#" style="color:var(--red);font-size:12px" onclick="monUnlink(\\''+id+'\\',\\''+encodeURIComponent(u)+'\\');return false">remover</a></div>';});
+   h+='<div style="color:var(--faint);font-size:11.5px;margin:8px 0">Endereço do app do cliente: <b style="color:var(--text)">'+location.origin+'/c</b></div>';
+   h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="monToggle(\\''+id+'\\',false)">Desligar monitoramento</button>';
+  } else h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border)" onclick="monToggle(\\''+id+'\\',true)">Liberar monitoramento</button>';
+  el.innerHTML=h;el.style.color='var(--text)';
+ }).catch(function(){el.textContent='Não consegui carregar.';});}
+function monToggle(id,on){api('/api/monitor',{method:'POST',body:{id:id,on:on}}).then(function(){toast(on?'Monitoramento liberado':'Monitoramento desligado');loadMon(id);}).catch(function(){toast('Falha ao alterar');});}
+function monUnlink(id,u){u=decodeURIComponent(u);if(!confirm('Remover o celular '+u+' deste carro?'))return;api('/api/monitor-unlink',{method:'POST',body:{id:id,user:u}}).then(function(){toast('Celular removido');loadMon(id);}).catch(function(){toast('Falha ao remover');});}
+function genCode(id){api('/api/pair-code',{method:'POST',body:{id:id}}).then(function(r){var el=document.getElementById('mon-code');if(!el)return;
+  if(monCodeTimer)clearInterval(monCodeTimer);
+  var draw=function(){var s=Math.max(0,Math.round((r.exp-Date.now())/1000));if(!document.getElementById('mon-code')){clearInterval(monCodeTimer);return;}
+   el.innerHTML='<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;text-align:center"><div style="font:700 26px ui-monospace,Menlo,monospace;letter-spacing:4px;color:#2bb0a6">'+r.code+'</div><div style="color:var(--faint);font-size:11.5px;margin-top:4px">'+(s>0?('vale por '+Math.floor(s/60)+':'+String(s%60).padStart(2,'0')+' · uso único · o cliente digita em '+location.origin+'/c'):'expirou — gere outro')+'</div></div>';
+   if(s<=0)clearInterval(monCodeTimer);};
+  draw();monCodeTimer=setInterval(draw,1000);
+ }).catch(function(){toast('Falha ao gerar o código');});}
 function closeDetail(){document.getElementById('detail').style.display='none';if(doWatch){clearInterval(doWatch);doWatch=null;}}
 function allowRemoval(id){api('/api/allow-removal',{method:'POST',body:{id:id}}).then(function(){toast('Remoção de Device Owner autorizada');loadCars();closeDetail();}).catch(function(){});}
 function setTest(id,on){api('/api/set-test',{method:'POST',body:{id:id,on:on}}).then(function(){toast(on?'Canal de teste ativado — o carro atualiza no próximo ping':'Canal de teste desativado');loadCars();var d=document.getElementById('detail');if(d&&d.style.display==='flex')setTimeout(function(){openDetail(id);},500);}).catch(function(){toast('Falha ao alterar o canal');});}
