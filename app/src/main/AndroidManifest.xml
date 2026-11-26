@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Teste de câmeras (v59): ler as câmeras do veículo (360°/AVM). -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Projeção no cluster: ícone flutuante sobre a tela + serviço em primeiro plano. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -28,6 +31,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Teste de câmeras (menu escondido): só descoberta, sem transmissão. -->
+        <activity
+            android:name=".CameraTestActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@android:style/Theme.Black.NoTitleBar" />
 
         <!-- "Tela limpa": entra em PiP pra o launcher esconder o dock da home. -->
         <activity

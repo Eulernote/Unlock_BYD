@@ -38,6 +38,8 @@
 
 # Reflexao na API do sistema BYD (classe externa acessada por string) - sem warning.
 -dontwarn android.hardware.bydauto.**
+-dontwarn android.hardware.AVMCamera**
+-dontwarn android.hardware.BmmCameraInfo
 
 # Componentes citados no manifesto (Activities/Services/Receivers) ja sao mantidos
 # pelo AGP; o resto de com.euler.catalog pode ser ofuscado normalmente.

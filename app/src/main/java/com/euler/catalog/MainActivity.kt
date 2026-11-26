@@ -338,6 +338,7 @@ class MainActivity : Activity() {
     private fun showHiddenToolsMenu() {
         val items = listOf(
             "⬆ Procurar atualização do Unlock BYD agora" to { checkUpdatesNow() },
+            "📷 Teste de câmeras (v59)" to { startActivity(Intent(this, CameraTestActivity::class.java)); Unit },
             "ADAS: testar códigos p/ esconder (Shark)" to { showAdasTestMenu() },
             "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
             "Início automático (religar / diagnóstico)" to { showAutostart() },
