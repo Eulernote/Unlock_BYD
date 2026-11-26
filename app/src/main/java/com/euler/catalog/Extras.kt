@@ -22,6 +22,10 @@ import java.util.zip.ZipFile
  *   "download" (padrão) -> Download/<pasta>/<nome>
  *   "obb"  -> Android/obb/<pacote>/   (arquivo .obb, ou .zip que é descompactado lá)
  *   "data" -> Android/data/<pacote>/  (.zip com a pasta do jogo, descompactado lá)
+ *   "raiz" -> .zip descompactado na RAIZ do armazenamento mantendo as pastas do zip
+ *             (ex.: zip com a pasta nfsu2 → /sdcard/nfsu2). Android 10: direto. Android 11+: precisa do
+ *             acesso a todos os arquivos (liberado sozinho pelo ADB, se a depuração estiver ativa);
+ *             sem isso, vai para Download/<pasta> e o carro mostra como mover.
  *   "download_zip" -> .zip descompactado em Download/<pasta>/ (se o zip tiver uma única pasta por fora,
  *                     ela é "aberta": o conteúdo dela vai direto para Download/<pasta>/)
  * Regra por Android:
@@ -66,7 +70,7 @@ object Extras {
 
     /** Precisa da permissão de armazenamento (só Android 10 ou anterior, para gravar em Android/obb e Android/data). */
     fun needsStoragePermission(extras: List<Extra>): Boolean =
-        Build.VERSION.SDK_INT <= 29 && extras.any { it.destino == "obb" || it.destino == "data" }
+        Build.VERSION.SDK_INT <= 29 && extras.any { it.destino == "obb" || it.destino == "data" || it.destino == "raiz" }
 
     private fun androidName(): String = "Android " + (Build.VERSION.RELEASE ?: Build.VERSION.SDK_INT.toString())
 
@@ -77,6 +81,7 @@ object Extras {
             val r = when (ex.destino) {
                 "obb" -> special(ctx, ex, pkg, "obb", cancel, report)
                 "data" -> special(ctx, ex, pkg, "data", cancel, report)
+                "raiz" -> rootExtract(ctx, ex, pkg, cancel, report)
                 "download_zip" -> Result(zipTo(ctx, ex, pkg, null, cancel, report, layout = ::downloadZipLayout) { rel, inp ->
                     val dir = rel.substringBeforeLast('/', "")
                     writeToDownloads(ctx, downloadsRel(ex.pasta) + (if (dir.isNotEmpty()) "$dir/" else ""), rel.substringAfterLast('/'), inp)
@@ -86,6 +91,76 @@ object Extras {
             if (!r.ok && r.erro == null) r.copy(erro = lastError) else r
         } catch (e: DlError) { Result(false, erro = e.message) }
         catch (e: Exception) { Result(false, erro = lastError ?: e.message) }
+    }
+
+    // ---------- raiz do armazenamento ----------
+    // Pastas que NUNCA apagamos/sobrescrevemos na raiz, mesmo que um zip as traga.
+    private val PROTECTED = setOf("android", "dcim", "download", "downloads", "pictures", "music", "movies", "documents",
+        "alarms", "notifications", "podcasts", "ringtones", "audiobooks", "recordings", "screenshots")
+
+    @Suppress("DEPRECATION")
+    private fun storageRoot(): File = Environment.getExternalStorageDirectory()
+
+    /** Tem permissão para escrever direto na raiz? (Android 11+: "acesso a todos os arquivos"; tenta liberar pelo ADB.) */
+    private fun canWriteRoot(ctx: Context): Boolean {
+        if (Build.VERSION.SDK_INT >= 30) {
+            if (Environment.isExternalStorageManager()) return true
+            try { AdbShell.run(ctx, "appops set --uid ${ctx.packageName} MANAGE_EXTERNAL_STORAGE allow; appops set ${ctx.packageName} MANAGE_EXTERNAL_STORAGE allow", 15000) } catch (_: Exception) {}
+            return Environment.isExternalStorageManager()
+        }
+        return storageRoot().canWrite()
+    }
+
+    private fun rootPrefs(ctx: Context) = ctx.getSharedPreferences("extras_raiz", Context.MODE_PRIVATE)
+
+    private fun rootExtract(ctx: Context, ex: Extra, pkg: String, cancel: () -> Boolean, report: (String) -> Unit): Result {
+        if (!ex.nome.endsWith(".zip", true)) { lastError = "para a raiz, envie a pasta compactada em .zip"; return Result(false) }
+        val root = storageRoot()
+        val tops = HashSet<String>()
+        val layout = { names: List<String>, _: String ->
+            Pair({ n: String ->
+                val x = n.replace('\\', '/').trimStart('/')
+                val top = x.substringBefore('/')
+                if (x.isEmpty() || x.startsWith("__MACOSX/") || x.endsWith(".DS_Store") || top.lowercase() in PROTECTED) null
+                else { tops += top; x }
+            }, null as String?)
+        }
+        if (canWriteRoot(ctx)) {
+            val ok = zipTo(ctx, ex, pkg, root, cancel, report, layout = layout) { rel, inp -> writeFile(File(root, rel), inp) }
+            if (ok) {
+                // Guarda quais pastas criamos na raiz, pra apagar só elas ao desinstalar.
+                rootPrefs(ctx).edit().putStringSet(ex.url, tops.filter { it.contains('/') == false && it.isNotBlank() }.toSet()).apply()
+                return Result(true)
+            }
+            if (lastError != null) return Result(false)
+        }
+        // Sem acesso à raiz: extrai em Download/<pasta>/ e explica como mover.
+        val base = downloadsRel(ex.pasta.ifEmpty { pkg })
+        val ok = zipTo(ctx, ex, pkg, null, cancel, report, layout = layout) { r, inp ->
+            val sub = r.substringBeforeLast('/', ""); val name = r.substringAfterLast('/')
+            writeToDownloads(ctx, base + (if (sub.isNotEmpty()) "$sub/" else ""), name, inp)
+        }
+        if (!ok) return Result(false)
+        val folder = tops.firstOrNull() ?: ex.pasta
+        val manual = "Este carro (${androidName()}) não permitiu gravar direto na memória principal. Os arquivos foram colocados na pasta Download.\n\n" +
+            "Faça manualmente:\n" +
+            "1. Abra o app Arquivos do carro.\n" +
+            "2. Entre em Download → ${ex.pasta.ifEmpty { pkg }}.\n" +
+            "3. Segure a pasta \"$folder\" e escolha Mover.\n" +
+            "4. Cole na memória principal (a primeira tela do app Arquivos, fora de qualquer pasta).\n" +
+            "5. Depois abra o jogo."
+        return Result(true, manual)
+    }
+
+    private fun removeRootFolders(ctx: Context, ex: Extra) {
+        val tops = rootPrefs(ctx).getStringSet(ex.url, null) ?: return
+        val root = storageRoot()
+        for (t in tops) {
+            if (t.isBlank() || t.contains('/') || t.contains("..") || t.lowercase() in PROTECTED) continue
+            try { File(root, t).deleteRecursively() } catch (_: Exception) {}
+        }
+        rootPrefs(ctx).edit().remove(ex.url).apply()
+        removeExtractedFolder(ctx, ex.pasta)   // cópia do plano B em Download, se houver
     }
 
     // ---------- OBB / data ----------
@@ -217,6 +292,7 @@ object Extras {
     /** Apaga o extra (só cópias feitas por este app na pasta Download). OBB/data o Android apaga junto com o app. */
     fun remove(ctx: Context, ex: Extra) {
         if (ex.destino == "download_zip") { removeExtractedFolder(ctx, ex.pasta); return }
+        if (ex.destino == "raiz") { removeRootFolders(ctx, ex); return }
         if (ex.destino != "download") return
         if (Build.VERSION.SDK_INT >= 29) {
             try {
