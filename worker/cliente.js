@@ -255,7 +255,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-3';
+const V = 'ubyd-c-4';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -389,7 +389,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
       '<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>'+
       '<div class="chips" id="cams-'+i+'"></div>'+
-      '<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Automática</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select></div>'+
+      '<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Automática</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">Auto</option><option>H264</option><option>VP8</option></select></div>'+
       '<button class="btn btn-p" id="pb-'+i+'" onclick="toggleLive('+i+')">▶ Ver ao vivo</button>')
      :'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>')+
     '<button class="link" style="color:var(--fa);font-size:12.5px" onclick="unlink('+i+')">Desvincular este carro</button></div>';
@@ -405,7 +405,7 @@ function toggleLive(i){if(LIVE&&LIVE.i===i){stopLive('Transmissão encerrada.');
 function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};LIVE=L;
  $('pb-'+i).textContent='■ Parar';$('inf-'+i).textContent='';ov(i,'Conectando ao carro…');
  var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/c/ws?car='+encodeURIComponent(c.id)+'&t='+encodeURIComponent(T));L.ws=ws;
- var start=function(){try{ws.send(JSON.stringify({t:'start',cam:L.want||'auto',size:($('sz-'+i)||{}).value||'auto'}));}catch(e){}};
+ var start=function(){try{ws.send(JSON.stringify({t:'start',cam:L.want||'auto',size:($('sz-'+i)||{}).value||'auto',codec:($('cd-'+i)||{}).value||'auto'}));}catch(e){}};
  L.stats=setInterval(function(){statsTick(L);},2000);
  ws.onmessage=function(e){if(L.done)return;var m;try{m=JSON.parse(e.data);}catch(x){return;}
   if(m.t==='hello'){L.ice=m.ice||[];if(m.online){ov(i,'Ligando a câmera…');start();}else ov(i,'O carro está desligado ou sem internet. Pode esperar aqui: quando ele conectar, a imagem começa.');}
@@ -415,7 +415,7 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent='Câmera: '+(m.cam||'?')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'');
    var cs=m.cams||[];L.cams=cs;$('cams-'+i).innerHTML=cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+')">'+camName(k)+'</button>';}).join('');
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
-  else if(m.t==='stats'){L.carFps=m.fps;}
+  else if(m.t==='stats'){L.car=m;}
   else if(m.t==='error'){ov(i,'O carro avisou: '+(m.msg||'erro'));}
  };
  ws.onclose=function(ev){if(!L.done)stopLive(ev.code===1006?'Sem conexão com o servidor. Toque em Ver ao vivo para tentar de novo.':'Conexão encerrada. Toque em Ver ao vivo para tentar de novo.');};
@@ -434,10 +434,12 @@ var CAMN={rvs:'Ré',rear:'Traseira',front:'Frontal',pano_h:'360° (alta)',pano_l
 function camName(k){return CAMN[k]||(k.indexOf('id:')===0?('Câmera '+k.slice(3)):k);}
 function pickCam(i,j){var L=LIVE;if(!L||L.i!==i)return;if(j!=null&&L.cams)L.want=L.cams[j];var sz=($('sz-'+i)||{}).value||'auto';
  try{L.ws.send(JSON.stringify({t:'cam',cam:L.want||L.cam||'auto',size:sz}));}catch(e){}ov(i,'Trocando de câmera…');setTimeout(function(){if(LIVE===L&&L.pc&&L.pc.connectionState==='connected')ov(i,'');},2500);}
-function statsTick(L){var el=$('sta-'+L.i);if(!el)return;var car=(L.carFps!=null)?('Carro: '+L.carFps+' quadros/s'):'Carro: aguardando…';
+function statsTick(L){var el=$('sta-'+L.i);if(!el)return;var c=L.car;
+ var car=c?('Carro: câmera '+c.fps+' q/s'+(c.ow?(' · envia '+c.ow+'×'+c.oh+' '+Math.round(c.ofps||0)+' q/s'):'')+(c.kbps!=null?(' '+c.kbps+' kbps'):'')+(c.codec?(' · '+String(c.codec).replace('video/','')):'')+(c.enc?(' ('+c.enc+')'):'')+(c.lim&&c.lim!=='none'?(' · limitado por: '+(c.lim==='bandwidth'?'internet':c.lim==='cpu'?'processador':c.lim)):'')+(c.aob?(' · banda '+Math.round(c.aob)+' kbps'):'')+(c.net?(' · rede '+c.net):'')):'Carro: aguardando…';
  if(!L.pc){el.textContent=car;return;}
  L.pc.getStats().then(function(r){var t='';r.forEach(function(s){if(s.type==='inbound-rtp'&&s.kind==='video'){var kb=L.lastB!=null?Math.round((s.bytesReceived-L.lastB)*8/2000):0;L.lastB=s.bytesReceived;
-   t=' · Celular: '+(s.framesPerSecond||0)+' quadros/s'+(s.frameWidth?(', '+s.frameWidth+'×'+s.frameHeight):'')+', '+kb+' kbps';}});el.textContent=car+t;}).catch(function(){});}
+   t=' — Celular: '+(s.framesPerSecond||0)+' q/s'+(s.frameWidth?(', '+s.frameWidth+'×'+s.frameHeight):'')+', '+kb+' kbps';}});el.textContent=car+t;}).catch(function(){});}
+function restartLive(i){if(LIVE&&LIVE.i===i){stopLive();startLive(i);}}
 function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}var v=$('vid-'+L.i);if(v)v.srcObject=null;}
 function stopLive(msg){var L=LIVE;if(!L)return;L.done=true;LIVE=null;clearTimeout(L.timer);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
  try{L.ws.send(JSON.stringify({t:'stop'}));}catch(e){}try{L.ws.close();}catch(e){}dropPc(L);

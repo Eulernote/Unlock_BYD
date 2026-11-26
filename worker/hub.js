@@ -98,7 +98,7 @@ export class CarHub {
       const car = this.car();
       if(m.t === 'start'){
         if(!car) return send(ws, {t: 'offline'});
-        send(car, {t: 'start', v: a.vid, cam: String(m.cam || 'auto').slice(0, 20), size: String(m.size || 'auto').slice(0, 12), ice: await iceServers(this.env)});
+        send(car, {t: 'start', v: a.vid, cam: String(m.cam || 'auto').slice(0, 20), size: String(m.size || 'auto').slice(0, 12), codec: String(m.codec || 'auto').slice(0, 8), ice: await iceServers(this.env)});
       } else if(m.t === 'cam'){
         if(car) send(car, {t: 'cam', v: a.vid, cam: String(m.cam || 'auto').slice(0, 20), size: String(m.size || 'auto').slice(0, 12)});
       } else if(m.t === 'answer' && typeof m.sdp === 'string'){
