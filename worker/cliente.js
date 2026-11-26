@@ -320,7 +320,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-8';
+const V = 'ubyd-c-9';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -372,6 +372,13 @@ input:focus{border-color:var(--ac)}
 .car b{font-size:16px}.dot{font-size:12.5px;color:var(--mu)}
 .live{margin-top:14px;background:#000;border-radius:12px;aspect-ratio:16/9;position:relative;overflow:hidden}
 .live video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+.live.fs{position:fixed;inset:0;z-index:60;width:100vw;height:100vh;height:100dvh;aspect-ratio:auto;margin:0;border-radius:0}
+.live canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;display:none}
+.fsbar{display:none;position:absolute;left:0;right:0;top:0;z-index:4;gap:6px;flex-wrap:wrap;align-items:center;padding:calc(env(safe-area-inset-top) + 8px) 10px 10px;background:linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,0))}
+.live.fs .fsbar{display:flex}
+.fsx{margin-left:auto;background:rgba(0,0,0,.6);border:1px solid #444;color:#fff;border-radius:99px;padding:6px 12px;font-size:14px}
+.fsbtn{position:absolute;right:8px;bottom:8px;z-index:3;background:rgba(0,0,0,.55);border:1px solid #444;color:#fff;border-radius:8px;padding:5px 9px;font-size:13px}
+.live.fs .fsbtn{display:none}
 .ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:#c9d1dc;font-size:13.5px;background:rgba(0,0,0,.6)}
 .on{color:var(--gr)}.off{color:var(--fa)}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chip{background:var(--s2);border:1px solid var(--bd);color:var(--tx);border-radius:99px;padding:6px 12px;font-size:13px}.chip.sel{background:var(--ac);color:#04201D;border-color:var(--ac);font-weight:700}
@@ -468,7 +475,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
    var can=c.active&&c.monitor;
    return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
-    (can?('<div class="live"><video id="vid-'+i+'" playsinline muted autoplay onclick="fullV(this)"></video><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
+    (can?('<div class="live" id="live-'+i+'"><video id="vid-'+i+'" playsinline muted autoplay onclick="openFull('+i+')"></video><canvas id="cv-'+i+'" onclick="openFull('+i+')"></canvas><div class="fsbar" id="fsb-'+i+'"></div><button class="fsbtn" onclick="openFull('+i+')">⛶</button><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
       (DIAG?'<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>':'')+
       '<div class="chips" id="cams-'+i+'"></div>'+
@@ -507,9 +514,12 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
   else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
   else if(m.t==='offer'){L.got=true;clearTimeout(L.wd);onOffer(L,m.sdp);}
-  else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
+  else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.real&&m.real!==m.cam?(' ('+m.real+')'):'')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
    var cs=(m.cams||[]).filter(function(k){return DIAG||k.indexOf('id:')!==0;});L.cams=cs;
-   $('cams-'+i).innerHTML=cs.length<2&&!DIAG?'':cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+')">'+camName(k)+'</button>';}).join('');
+   var chips=cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+',true)">'+camName(k)+'</button>';}).join('');
+   $('cams-'+i).innerHTML=cs.length<2&&!DIAG?'':chips;
+   $('fsb-'+i).innerHTML=(cs.length<2?'':chips)+'<button class="fsx" onclick="closeFull()">✕ Sair</button>';
+   setGrid(L,m.layout==='strip4'?m.tiles:null);
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
   else if(m.t==='stats'){L.car=m;}
   else if(m.t==='error'){L.got=true;clearTimeout(L.wd);ov(i,'O carro avisou: '+(m.msg||'erro'));}
@@ -526,9 +536,9 @@ function onOffer(L,sdp){dropPc(L);var pc=new RTCPeerConnection({iceServers:L.ice
  pc.setRemoteDescription({type:'offer',sdp:sdp}).then(function(){return pc.createAnswer();}).then(function(a){return pc.setLocalDescription(a);})
   .then(function(){return gathered(pc,2500);}).then(function(){if(L.done||L.pc!==pc)return;L.ws.send(JSON.stringify({t:'answer',sdp:pc.localDescription.sdp}));ov(L.i,'Conectando o vídeo…');})
   .catch(function(e){ov(L.i,'Erro ao abrir o vídeo: '+(e&&e.message||e));});}
-var CAMN={rvs:'Câmera de ré',rear:'Traseira',front:'Frontal',pano_h:'360° (alta)',pano_l:'360° (baixa)',byd_apa:'360° APA',apa:'APA',rf:'Direita',dms:'Motorista',face:'Rosto'};
+var CAMN={'v:360':'360° (4 câmeras)','v:front':'Frente','v:rear':'Ré','v:left':'Esquerda','v:right':'Direita',rvs:'Câmera de ré',rear:'Traseira',front:'Frontal',pano_h:'360° (alta)',pano_l:'360° (baixa)',byd_apa:'360° APA',apa:'APA',rf:'Direita',dms:'Motorista',face:'Rosto'};
 function camName(k){return CAMN[k]||(k.indexOf('id:')===0?('Câmera '+k.slice(3)):k);}
-function pickCam(i,j){var L=LIVE;if(!L||L.i!==i)return;if(j!=null&&L.cams)L.want=L.cams[j];var sz=($('sz-'+i)||{}).value||'auto';
+function pickCam(i,j,full){var L=LIVE;if(!L||L.i!==i)return;if(full)openFull(i);if(j!=null&&L.cams)L.want=L.cams[j];var sz=($('sz-'+i)||{}).value||'auto';
  try{L.ws.send(JSON.stringify({t:'cam',cam:L.want||L.cam||'auto',size:sz}));}catch(e){}ov(i,'Trocando de câmera…');setTimeout(function(){if(LIVE===L&&L.pc&&L.pc.connectionState==='connected')ov(i,'');},2500);}
 function statsTick(L){var el=$('sta-'+L.i);if(!el)return;var c=L.car;
  var car=c?('Carro: câmera '+c.fps+' q/s'+(c.ow?(' · envia '+c.ow+'×'+c.oh+' '+Math.round(c.ofps||0)+' q/s'):'')+(c.kbps!=null?(' '+c.kbps+' kbps'):'')+(c.codec?(' · '+String(c.codec).replace('video/','')):'')+(c.enc?(' ('+c.enc+')'):'')+(c.lim&&c.lim!=='none'?(' · limitado por: '+(c.lim==='bandwidth'?'internet':c.lim==='cpu'?'processador':c.lim)):'')+(c.aob?(' · banda '+Math.round(c.aob)+' kbps'):'')+(c.net?(' · rede '+c.net):'')):'Carro: aguardando…';
@@ -536,8 +546,29 @@ function statsTick(L){var el=$('sta-'+L.i);if(!el)return;var c=L.car;
  L.pc.getStats().then(function(r){var t='';r.forEach(function(s){if(s.type==='inbound-rtp'&&s.kind==='video'){var kb=L.lastB!=null?Math.round((s.bytesReceived-L.lastB)*8/2000):0;L.lastB=s.bytesReceived;
    t=' — Celular: '+(s.framesPerSecond||0)+' q/s'+(s.frameWidth?(', '+s.frameWidth+'×'+s.frameHeight):'')+', '+kb+' kbps';}});el.textContent=car+t;}).catch(function(){});}
 function restartLive(i){if(LIVE&&LIVE.i===i){stopLive();startLive(i);}}
+/* 360: a faixa com as 4 câmeras vira uma grade 2x2 (Frente | Ré / Esquerda | Direita) */
+var GRID_ORDER=[['v:front','Frente'],['v:rear','Ré'],['v:left','Esquerda'],['v:right','Direita']];
+function setGrid(L,tiles){L.tiles=tiles;var cv=$('cv-'+L.i);if(!cv)return;cv.style.display=tiles?'block':'none';if(tiles&&!L.raf)gridLoop(L);}
+function gridLoop(L){L.raf=0;if(L.done||!L.tiles||LIVE!==L)return;var v=$('vid-'+L.i),cv=$('cv-'+L.i);
+ if(v&&cv&&v.videoWidth){var vw=v.videoWidth,vh=v.videoHeight,tw=Math.floor(vw/4);
+  if(cv.width!==tw*2||cv.height!==vh*2){cv.width=tw*2;cv.height=vh*2;}
+  var g=cv.getContext('2d');g.fillStyle='#000';g.fillRect(0,0,cv.width,cv.height);
+  GRID_ORDER.forEach(function(o,k){var off=L.tiles[o[0]];if(off==null)return;var dx=(k%2)*tw,dy=Math.floor(k/2)*vh;
+   g.drawImage(v,Math.round(off*vw),0,tw,vh,dx,dy,tw,vh);
+   var fs=Math.max(14,Math.round(vh/14));g.font='600 '+fs+'px -apple-system,Roboto,sans-serif';var tw2=g.measureText(o[1]).width;
+   g.fillStyle='rgba(0,0,0,.55)';g.fillRect(dx+8,dy+8,tw2+fs,fs*1.6);g.fillStyle='#fff';g.fillText(o[1],dx+8+fs/2,dy+8+fs*1.15);});
+  g.fillStyle='#000';g.fillRect(tw-1,0,2,cv.height);g.fillRect(0,vh-1,cv.width,2);}
+ L.raf=requestAnimationFrame(function(){gridLoop(L);});}
+/* tela cheia: o quadro do vídeo cobre a tela; no Android tenta tela cheia de verdade e deitar a tela */
+var FS=null;
+function openFull(i){var el=$('live-'+i);if(!el||!LIVE||LIVE.i!==i)return;if(FS===i)return;FS=i;el.classList.add('fs');document.body.style.overflow='hidden';
+ try{if(el.requestFullscreen){var pr=el.requestFullscreen();if(pr&&pr.then)pr.then(function(){try{screen.orientation.lock('landscape').catch(function(){});}catch(e){}}).catch(function(){});}}catch(e){}}
+function closeFull(){if(FS==null)return;var el=$('live-'+FS);FS=null;if(el)el.classList.remove('fs');document.body.style.overflow='';
+ try{if(screen.orientation&&screen.orientation.unlock)screen.orientation.unlock();}catch(e){}
+ try{if(document.fullscreenElement)document.exitFullscreen();}catch(e){}}
+document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement&&FS!=null)closeFull();});
 function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}var v=$('vid-'+L.i);if(v)v.srcObject=null;}
-function stopLive(msg){var L=LIVE;if(!L)return;L.done=true;LIVE=null;clearTimeout(L.timer);clearTimeout(L.wd);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
+function stopLive(msg){var L=LIVE;if(!L)return;closeFull();if(L.raf)cancelAnimationFrame(L.raf);var cv=$('cv-'+L.i);if(cv)cv.style.display='none';L.done=true;LIVE=null;clearTimeout(L.timer);clearTimeout(L.wd);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
  try{L.ws.send(JSON.stringify({t:'stop'}));}catch(e){}try{L.ws.close();}catch(e){}dropPc(L);
  var b=$('pb-'+L.i);if(b)b.textContent='▶ Ver ao vivo';ov(L.i,msg||'📷 Toque em “Ver ao vivo”');}
 document.addEventListener('visibilitychange',function(){if(document.hidden&&LIVE)stopLive('Pausado ao sair do app. Toque para ver de novo.');});
