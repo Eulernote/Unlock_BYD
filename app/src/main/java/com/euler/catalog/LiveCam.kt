@@ -40,8 +40,8 @@ object LiveCam {
     private const val TAG = "LiveCam"
     private const val OUT_W = 1280
     private const val OUT_H = 720
-    private const val OUT_FPS = 20
-    private const val MAX_BITRATE = 1_000_000           // ~1 Mbps (≈ 450 MB por hora assistindo)
+    private const val OUT_FPS = 15
+    private const val MAX_BITRATE = 1_500_000           // teto ~1,5 Mbps (a banda real decide)
     private const val MAX_SESSION_MS = 10 * 60 * 1000L   // trava de segurança no carro: 10 min por sessão
     private val PRIORITY = arrayOf("rvs", "rear", "front", "pano_h", "pano_l", "byd_apa", "apa", "rf")
     private val PANO = setOf("pano_h", "pano_l", "byd_apa", "apa")
@@ -70,13 +70,13 @@ object LiveCam {
 
     // ---------------- API usada pelo MonitorService ----------------
     /** cam: "auto", uma tag da BYD ("rvs", "front", "pano_h"…) ou "id:N". size: "auto" ou "LxA" (ex.: "1280x720"). */
-    fun start(ctx: Context, v: String, ice: JSONArray?, cam: String, size: String, send: (JSONObject) -> Unit) = exec.execute {
+    fun start(ctx: Context, v: String, ice: JSONArray?, cam: String, size: String, codec: String, send: (JSONObject) -> Unit) = exec.execute {
         try {
             ensureFactory(ctx.applicationContext)
             ensurePipeline()
             if (avm == null || (cam != "auto" && cam != camLabel) || size != sizeMode) openAvm(cam, size)
             stopPeer(v, closeCamIfIdle = false)
-            val pc = createPeer(v, ice, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
+            val pc = createPeer(v, ice, codec, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
             peers[v] = Peer(pc, send)
             pc.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(sdp: SessionDescription) {
@@ -139,7 +139,7 @@ object LiveCam {
             exec.execute {
                 if (avm == null) return@execute
                 val n = frames.get(); val fps = (n - lastFrames) / 2; lastFrames = n
-                for ((k, peer) in peers) peer.send(JSONObject().put("t", "stats").put("v", k).put("fps", fps).put("total", n))
+                for ((k, peer) in peers) peerStats(k, peer, fps)
                 main.postDelayed(this, 2000)
             }
         }
@@ -175,7 +175,7 @@ object LiveCam {
             .createPeerConnectionFactory()
     }
 
-    private fun createPeer(v: String, ice: JSONArray?, send: (JSONObject) -> Unit): PeerConnection? {
+    private fun createPeer(v: String, ice: JSONArray?, codec: String, send: (JSONObject) -> Unit): PeerConnection? {
         val servers = ArrayList<PeerConnection.IceServer>()
         if (ice != null) for (i in 0 until ice.length()) {
             val o = ice.optJSONObject(i) ?: continue
@@ -216,10 +216,58 @@ object LiveCam {
         val tr = pc.addTransceiver(track, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY, listOf("cam")))
         try {
             val params = tr.sender.parameters
-            for (enc in params.encodings) { enc.maxBitrateBps = MAX_BITRATE; enc.maxFramerate = OUT_FPS }
+            for (enc in params.encodings) { enc.maxBitrateBps = MAX_BITRATE; enc.maxFramerate = OUT_FPS; enc.scaleResolutionDownBy = 1.0 }
+            // Monitoramento: melhor imagem nítida com menos quadros do que imagem borrada (padrão do WebRTC é baixar a resolução).
+            params.degradationPreference = org.webrtc.RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
             tr.sender.setParameters(params)
         } catch (t: Throwable) { Log.w(TAG, "bitrate: ${t.message}") }
+        if (codec == "H264" || codec == "VP8" || codec == "VP9") preferCodec(tr, codec)
         return pc
+    }
+
+    /** Coloca o codec escolhido em primeiro (por reflexão: nem toda versão do WebRTC tem essa API). */
+    private fun preferCodec(tr: RtpTransceiver, name: String) {
+        try {
+            val f = factory ?: return
+            val mt = org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO
+            val caps = f.javaClass.getMethod("getRtpSenderCapabilities", mt.javaClass).invoke(f, mt) ?: return
+            @Suppress("UNCHECKED_CAST")
+            val codecs = caps.javaClass.getField("codecs").get(caps) as List<Any>
+            fun nm(c: Any) = (c.javaClass.getField("name").get(c) as? String ?: "")
+            val sorted = codecs.sortedBy { if (nm(it).equals(name, true)) 0 else 1 }
+            tr.javaClass.getMethod("setCodecPreferences", List::class.java).invoke(tr, sorted)
+        } catch (t: Throwable) { Log.w(TAG, "codec $name: ${t.message}") }
+    }
+
+    private val lastBytes = HashMap<String, Long>()
+    /** Estatística do lado do carro: codificador usado, o que está limitando a qualidade, banda disponível. */
+    private fun peerStats(v: String, p: Peer, camFps: Int) {
+        try {
+            p.pc.getStats { rep ->
+                val m = rep.statsMap
+                val o = JSONObject().put("t", "stats").put("v", v).put("fps", camFps)
+                for (st in m.values) {
+                    val mm = st.members
+                    if (st.type == "outbound-rtp" && mm["kind"] == "video") {
+                        o.put("enc", mm["encoderImplementation"]?.toString() ?: "")
+                        o.put("lim", mm["qualityLimitationReason"]?.toString() ?: "")
+                        o.put("ow", (mm["frameWidth"] as? Number)?.toInt() ?: 0).put("oh", (mm["frameHeight"] as? Number)?.toInt() ?: 0)
+                        o.put("ofps", (mm["framesPerSecond"] as? Number)?.toDouble() ?: 0.0)
+                        val b = (mm["bytesSent"] as? Number)?.toLong() ?: 0L
+                        val prev = lastBytes[v]; lastBytes[v] = b
+                        if (prev != null) o.put("kbps", (b - prev) * 8 / 2000)
+                        val codecId = mm["codecId"]?.toString()
+                        if (codecId != null) o.put("codec", m[codecId]?.members?.get("mimeType")?.toString() ?: "")
+                    } else if (st.type == "candidate-pair" && mm["nominated"] == true && mm["state"] == "succeeded") {
+                        o.put("aob", ((mm["availableOutgoingBitrate"] as? Number)?.toDouble() ?: 0.0) / 1000)
+                        o.put("rtt", ((mm["currentRoundTripTime"] as? Number)?.toDouble() ?: 0.0) * 1000)
+                        val lid = mm["localCandidateId"]?.toString()
+                        if (lid != null) o.put("net", m[lid]?.members?.get("candidateType")?.toString() ?: "")
+                    }
+                }
+                p.send(o)
+            }
+        } catch (t: Throwable) { p.send(JSONObject().put("t", "stats").put("v", v).put("fps", camFps)) }
     }
 
     private fun stopPeer(v: String, closeCamIfIdle: Boolean = true) {
@@ -299,7 +347,8 @@ object LiveCam {
         val m = Regex("^(\\d+)x(\\d+)$").find(size)
         if (m != null) { w = m.groupValues[1].toInt(); hh = m.groupValues[2].toInt() }
         else if (defW > 0 && defH > 0) { w = defW; hh = defH }
-        else { w = 1280; hh = 720 }
+        else if (tag in PANO) { w = 5120; hh = 960 }
+        else { w = 1280; hh = 960 }   // a câmera não informa o tamanho (0x0); 4:3 foi o que funcionou no Dolphin
         if (m != null || defW <= 0 || defH <= 0) try { method(cls, "setPreviewSize", 2)?.invoke(obj, w, hh) } catch (_: Throwable) {}
         sizeMode = if (m != null) size else "auto"
         // O buffer da imagem PRECISA ter o mesmo tamanho que a câmera desenha (senão não chega quadro).

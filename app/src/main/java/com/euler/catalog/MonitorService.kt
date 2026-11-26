@@ -96,7 +96,7 @@ class MonitorService : Service() {
                 val v = m.optString("v", "")
                 val send: (JSONObject) -> Unit = { o -> try { webSocket.send(o.toString()) } catch (_: Exception) {} }
                 when (m.optString("t")) {
-                    "start" -> if (v.isNotEmpty()) LiveCam.start(applicationContext, v, m.optJSONArray("ice"), m.optString("cam", "auto"), m.optString("size", "auto"), send)
+                    "start" -> if (v.isNotEmpty()) LiveCam.start(applicationContext, v, m.optJSONArray("ice"), m.optString("cam", "auto"), m.optString("size", "auto"), m.optString("codec", "auto"), send)
                     "cam" -> if (v.isNotEmpty()) LiveCam.switchCam(v, m.optString("cam", "auto"), m.optString("size", "auto"))
                     "answer" -> if (v.isNotEmpty()) LiveCam.answer(v, m.optString("sdp"))
                     "stop" -> if (v.isNotEmpty()) LiveCam.stop(v)
