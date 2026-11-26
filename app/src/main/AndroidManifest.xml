@@ -32,6 +32,16 @@
             </intent-filter>
         </activity>
 
+        <!-- Câmeras ao vivo: conexão com o hub enquanto o monitoramento estiver liberado no painel. -->
+        <service
+            android:name=".MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Monitoramento remoto das câmeras do veículo, a pedido do proprietário" />
+        </service>
+
         <!-- Teste de câmeras (menu escondido): só descoberta, sem transmissão. -->
         <activity
             android:name=".CameraTestActivity"

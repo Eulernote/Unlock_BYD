@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent?) {
+        if (MonitorService.enabled(ctx)) MonitorService.sync(ctx, true)
         try {
             if (!Store.isOnboarded(ctx)) return
             schedule(ctx.applicationContext, now = true)

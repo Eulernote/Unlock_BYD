@@ -43,3 +43,12 @@
 
 # Componentes citados no manifesto (Activities/Services/Receivers) ja sao mantidos
 # pelo AGP; o resto de com.euler.catalog pode ser ofuscado normalmente.
+
+# ---- WebRTC (camaras ao vivo): classes chamadas pelo codigo nativo via JNI. NAO ofuscar. ----
+-keep class org.webrtc.** { *; }
+-dontwarn org.webrtc.**
+# ---- OkHttp (WebSocket do hub) ----
+-dontwarn okhttp3.**
+-dontwarn org.conscrypt.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.openjsse.**

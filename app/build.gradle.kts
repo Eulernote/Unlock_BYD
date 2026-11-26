@@ -20,8 +20,10 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 59
-        versionName = "6.6"
+        versionCode = 60
+        versionName = "6.7"
+        // WebRTC (câmeras ao vivo) traz bibliotecas nativas: só ARM (as multimídias são ARM), APK menor.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     buildTypes {
@@ -61,4 +63,7 @@ dependencies {
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     // Cliente ADB: shell no próprio carro via 127.0.0.1:5555 (Device Owner sem notebook, cluster).
     implementation("dev.mobile:dadb:1.2.10")
+    // Câmeras ao vivo (v60): WebRTC pré-compilado + WebSocket pro hub de sinalização.
+    implementation("io.github.webrtc-sdk:android:114.5735.10")   // WebRTC puro (Java), sem dependência de Kotlin novo
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

@@ -329,6 +329,7 @@ class CameraTestActivity : Activity() {
                 if (!bound) L("⚠ não consegui ligar a textura — mesmo assim tentando startPreview")
                 val sp = findMethod(cls, "startPreview", 0)?.invoke(obj)
                 L("startPreview() = $sp → olhe o contador de quadros")
+                try { L("tamanho real: ${findMethod(cls, "getPreviewWidth", 0)?.invoke(obj)}x${findMethod(cls, "getPreviewHeight", 0)?.invoke(obj)}") } catch (t: Throwable) { L("getPreviewWidth: ${err(t)}") }
             } catch (t: Throwable) {
                 L("✕ FALHOU $label: ${err(t)}")
                 setStatus("$label · falhou: ${err(t)}", RED); current = ""

@@ -134,6 +134,9 @@ object Store {
             val serverGrupo = o.optString("grupo", grupo ?: "byd_simples")
             // Mantém o grupo local em dia com o painel (a trava do início automático depende dele).
             if (serverGrupo.isNotBlank()) prefs(ctx).edit().putString("grupo", serverGrupo).apply()
+            // Câmeras ao vivo: liga/desliga a conexão com o hub conforme o painel (só com resposta válida).
+            val st = o.optString("status", "error")
+            if (st != "error") MonitorService.sync(ctx, st == "active" && o.optBoolean("mon", false))
             RegResult(o.optString("status", "error"), o.optBoolean("wipe", false), o.optString("plan", "basico"), serverGrupo,
                 o.optString("cmd", ""), o.optInt("tvc", 0), o.optString("turl", ""))
         } catch (e: Exception) { RegResult("error", false, "basico", "byd_simples") }
