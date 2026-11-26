@@ -13,3 +13,13 @@ id = "b9adb2a62add483b94a5088dac10a9b2"   # UBYD
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "unlock-byd"
+
+# Hub das câmeras ao vivo: 1 Durable Object por carro (sinalização WebRTC carro <-> celular).
+# SQLite + hibernação: conexões paradas não consomem tempo de execução.
+[[durable_objects.bindings]]
+name = "CAR_HUB"
+class_name = "CarHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["CarHub"]

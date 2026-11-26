@@ -11,6 +11,7 @@
 //  As câmeras ao vivo entram depois do teste da v59 no carro; aqui fica a base (login + vínculo).
 // ============================================================================
 import { ICON_180, ICON_192, ICON_512 } from './cliente-icons.js';
+export { CarHub } from './hub.js';
 
 const CLIENT_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30;  // 30 dias: cara de app, sem pedir senha toda hora
 const PAIR_TTL_S = 600;                                 // código de vínculo vale 10 min
@@ -70,6 +71,8 @@ export async function handleMonitorStaff(request, env, p, user, H){
   if(p === '/api/monitor' && request.method === 'GET'){
     const id = String(url.searchParams.get('id') || '');
     const m = await getMon(env, id);
+    // Carros liberados antes do campo c.mon existir: sincroniza ao abrir a ficha no painel.
+    try{ const c = await H.getCar(env, id); if(c && (c.mon === true) !== !!m.on){ c.mon = !!m.on; await H.putCar(env, c); } }catch(e){}
     return H.json({on: !!m.on, clients: m.clients || []});
   }
   const b = await request.json().catch(() => ({}));
@@ -81,6 +84,7 @@ export async function handleMonitorStaff(request, env, p, user, H){
   if(p === '/api/monitor' && request.method === 'POST'){
     m.on = b.on === true; m.by = user; m.at = Date.now();
     await putMon(env, id, m);
+    c.mon = m.on;   // vai junto no /api/register: o carro só abre a conexão das câmeras se estiver liberado
     c.log.push({acao: m.on ? 'Monitoramento liberado' : 'Monitoramento desligado', by: user, when: H.fmt(Date.now()), cls: m.on ? 'a-act' : 'a-rev'});
     await H.putCar(env, c);
     return H.json({ok:true, on:m.on});
@@ -105,6 +109,22 @@ export async function handleMonitorStaff(request, env, p, user, H){
 }
 
 // ---------------------------------------------------------------------------
+//  Conexão do CARRO com o hub (sem login, como o /api/register): só se o monitoramento estiver liberado
+// ---------------------------------------------------------------------------
+export async function handleCarWs(request, env, p, H){
+  if(p !== '/ws/car') return null;
+  if(!env.CAR_HUB) return H.json({error:'hub indisponível'}, 503);
+  if(request.headers.get('Upgrade') !== 'websocket') return H.json({error:'websocket'}, 426);
+  const id = String(new URL(request.url).searchParams.get('id') || '').trim();
+  const c = id ? await H.getCar(env, id) : null;
+  if(!c || c.status !== 'active') return H.json({error:'car'}, 403);
+  const m = await getMon(env, id);
+  if(!m.on) return H.json({error:'Monitoramento desligado'}, 403);
+  const hdr = new Headers(request.headers); hdr.set('X-Role', 'car');
+  return env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch(new Request(request.url, {headers: hdr}));
+}
+
+// ---------------------------------------------------------------------------
 //  Rotas do CLIENTE (/c...)
 // ---------------------------------------------------------------------------
 export async function handleClient(request, env, p, H){
@@ -120,6 +140,23 @@ export async function handleClient(request, env, p, H){
   if(GET && (p === '/c/apple-touch-icon.png' || p === '/c/icon-180.png')) return b64png(ICON_180);
   if(GET && p === '/c/icon-192.png') return b64png(ICON_192);
   if(GET && p === '/c/icon-512.png') return b64png(ICON_512);
+
+  // --- câmeras ao vivo: celular conecta no hub do carro ---
+  if(p === '/c/ws'){
+    if(!env.CAR_HUB) return H.json({error:'hub indisponível'}, 503);
+    if(request.headers.get('Upgrade') !== 'websocket') return H.json({error:'websocket'}, 426);
+    const url = new URL(request.url);
+    const user = await verifyClientToken(H, env.SECRET, url.searchParams.get('t') || '');
+    const carId = String(url.searchParams.get('car') || '');
+    if(!user) return H.json({error:'unauth'}, 401);
+    const [cli, m, car] = await Promise.all([getCli(env, user), getMon(env, carId), H.getCar(env, carId)]);
+    if(!cli || (cli.cars || []).indexOf(carId) < 0 || (m.clients || []).indexOf(user) < 0) return H.json({error:'unauth'}, 401);
+    if(!m.on || !car || car.status !== 'active') return H.json({error:'Monitoramento não liberado para este carro'}, 403);
+    const rnd = new Uint8Array(4); crypto.getRandomValues(rnd);
+    const vid = user + '~' + [...rnd].map(x => x.toString(16).padStart(2, '0')).join('');
+    const hdr = new Headers(request.headers); hdr.set('X-Role', 'viewer'); hdr.set('X-Viewer', vid);
+    return env.CAR_HUB.get(env.CAR_HUB.idFromName(carId)).fetch(new Request(request.url, {headers: hdr}));
+  }
 
   if(p.indexOf('/c/api/') !== 0) return H.json({error:'not found'}, 404);
 
@@ -174,7 +211,9 @@ export async function handleClient(request, env, p, H){
       const [c, m, seen] = await Promise.all([H.getCar(env, id), getMon(env, id), H.getSeen(env, id)]);
       // Só mostra carros em que ele continua na lista (a equipe pode ter removido) e que estão ativos.
       if(!c || (m.clients || []).indexOf(user) < 0) continue;
-      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, seen: seen || c.seen || 0});
+      let online = false;
+      if(env.CAR_HUB && m.on){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); online = !!(await r.json()).online; }catch(e){} }
+      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, seen: seen || c.seen || 0, online: online});
     }
     return H.json({user:user, cars:cars});
   }
@@ -216,7 +255,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-1';
+const V = 'ubyd-c-2';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -266,7 +305,10 @@ input:focus{border-color:var(--ac)}
 .car{display:flex;align-items:center;gap:14px}
 .car .ic{width:46px;height:46px;border-radius:12px;background:var(--s2);display:flex;align-items:center;justify-content:center;font-size:22px}
 .car b{font-size:16px}.dot{font-size:12.5px;color:var(--mu)}
-.live{margin-top:14px;background:#000;border-radius:12px;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--fa);font-size:13px;padding:16px}
+.live{margin-top:14px;background:#000;border-radius:12px;aspect-ratio:16/9;position:relative;overflow:hidden}
+.live video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+.ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:#c9d1dc;font-size:13.5px;background:rgba(0,0,0,.6)}
+.on{color:var(--gr)}.off{color:var(--fa)}
 .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--s2);border:1px solid var(--bd);color:var(--mu)}
 .hint{background:#10251f;border:1px solid #1f4d43;color:#bfe9e3;border-radius:14px;padding:14px;font-size:13.5px;margin-bottom:14px;position:relative}
 .hint b{color:#fff}.hint .x{position:absolute;top:6px;right:10px;background:none;border:0;color:#8fbfb8;font-size:20px}
@@ -332,18 +374,58 @@ function doPair(e){e.preventDefault();var b=$('pb');$('pe').textContent='';
  api('/c/api/pair',{code:$('pc').value,user:$('pu').value,pass:$('pp').value,consent:true}).then(function(r){save(r.token,r.user);$('pp').value='';$('pc').value='';show('home');})
  .catch(function(x){$('pe').textContent=x.message;}).then(function(){busy(b,false,'Vincular');});return false;}
 function ago(ms){if(!ms)return 'sem registro';var m=Math.round((Date.now()-ms)/60000);if(m<2)return 'agora há pouco';if(m<60)return 'há '+m+' min';var h=Math.round(m/60);if(h<24)return 'há '+h+' h';return 'há '+Math.round(h/24)+' dia(s)';}
-function loadMe(){$('cars').innerHTML='<div class="card" style="color:var(--mu)">Carregando…</div>';$('who').textContent=U?('Conectado como '+U):'';
+function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" style="color:var(--mu)">Carregando…</div>';$('who').textContent=U?('Conectado como '+U):'';
  api('/c/api/me').then(function(r){
   if(!r.cars.length){$('cars').innerHTML='<div class="card"><h2>Nenhum carro vinculado</h2><p class="sub" style="margin:0">Peça um código de vínculo à Unlock BYD e toque em "Vincular outro carro".</p></div>';return;}
   CARS=r.cars;$('cars').innerHTML=r.cars.map(function(c,i){
    var st=!c.active?'<span class="tag" style="color:var(--am)">Acesso suspenso</span>':(!c.monitor?'<span class="tag">Monitoramento desligado</span>':'<span class="tag" style="color:var(--gr)">Monitoramento liberado</span>');
-   return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">Último contato do carro: '+ago(c.seen)+'</div></div></div>'+
+   var conn=c.online?'<span class="on">● Online agora</span>':'<span class="off">○ Desligado ou sem internet · último contato '+ago(c.seen)+'</span>';
+   var can=c.active&&c.monitor;
+   return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
-    '<div class="live">📷 Câmeras ao vivo<br>Em breve — estamos finalizando os testes nos carros.</div>'+
+    (can?('<div class="live"><video id="vid-'+i+'" playsinline muted autoplay onclick="fullV(this)"></video><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
+      '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
+      '<button class="btn btn-p" id="pb-'+i+'" onclick="toggleLive('+i+')">▶ Ver ao vivo</button>')
+     :'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>')+
     '<button class="link" style="color:var(--fa);font-size:12.5px" onclick="unlink('+i+')">Desvincular este carro</button></div>';
   }).join('');
  }).catch(function(x){$('cars').innerHTML='<div class="card"><div class="err">'+esc(x.message)+'</div><button class="btn btn-g" onclick="loadMe()">Tentar de novo</button></div>';});}
 function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste login?'))return;api('/c/api/unlink',{car:c.id}).then(loadMe).catch(function(x){alert(x.message);});}
+
+/* câmeras ao vivo (WebRTC) */
+var LIVE=null;
+function ov(i,t){var o=$('ov-'+i);if(!o)return;o.textContent=t||'';o.style.display=t?'flex':'none';}
+function fullV(v){try{if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else if(v.requestFullscreen)v.requestFullscreen();}catch(e){}}
+function toggleLive(i){if(LIVE&&LIVE.i===i){stopLive('Transmissão encerrada.');return;}if(LIVE)stopLive();startLive(i);}
+function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};LIVE=L;
+ $('pb-'+i).textContent='■ Parar';$('inf-'+i).textContent='';ov(i,'Conectando ao carro…');
+ var ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/c/ws?car='+encodeURIComponent(c.id)+'&t='+encodeURIComponent(T));L.ws=ws;
+ var start=function(){try{ws.send(JSON.stringify({t:'start'}));}catch(e){}};
+ ws.onmessage=function(e){if(L.done)return;var m;try{m=JSON.parse(e.data);}catch(x){return;}
+  if(m.t==='hello'){L.ice=m.ice||[];if(m.online){ov(i,'Ligando a câmera…');start();}else ov(i,'O carro está desligado ou sem internet. Pode esperar aqui: quando ele conectar, a imagem começa.');}
+  else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
+  else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
+  else if(m.t==='offer'){onOffer(L,m.sdp);}
+  else if(m.t==='info'){$('inf-'+i).textContent='Câmera: '+(m.cam||'?')+(m.w?(' · '+m.w+'×'+m.h):'');}
+  else if(m.t==='error'){ov(i,'O carro avisou: '+(m.msg||'erro'));}
+ };
+ ws.onclose=function(ev){if(!L.done)stopLive(ev.code===1006?'Sem conexão com o servidor. Toque em Ver ao vivo para tentar de novo.':'Conexão encerrada. Toque em Ver ao vivo para tentar de novo.');};
+ L.timer=setTimeout(function(){stopLive('Sessão encerrada após 5 minutos (para economizar dados). Toque para ver de novo.');},5*60*1000);
+}
+function gathered(pc,ms){return new Promise(function(res){if(pc.iceGatheringState==='complete')return res();var t=setTimeout(res,ms);
+ pc.addEventListener('icegatheringstatechange',function(){if(pc.iceGatheringState==='complete'){clearTimeout(t);res();}});});}
+function onOffer(L,sdp){dropPc(L);var pc=new RTCPeerConnection({iceServers:L.ice});L.pc=pc;var v=$('vid-'+L.i);
+ pc.ontrack=function(e){if(!v)return;v.srcObject=(e.streams&&e.streams[0])?e.streams[0]:new MediaStream([e.track]);var p=v.play();if(p&&p.catch)p.catch(function(){});};
+ pc.onconnectionstatechange=function(){if(L.pc!==pc)return;var s=pc.connectionState;
+  if(s==='connected')ov(L.i,'');else if(s==='failed')ov(L.i,'Não consegui receber o vídeo nesta rede. Tente de novo (ou em outra rede).');else if(s==='disconnected')ov(L.i,'Sinal instável…');};
+ pc.setRemoteDescription({type:'offer',sdp:sdp}).then(function(){return pc.createAnswer();}).then(function(a){return pc.setLocalDescription(a);})
+  .then(function(){return gathered(pc,2500);}).then(function(){if(L.done||L.pc!==pc)return;L.ws.send(JSON.stringify({t:'answer',sdp:pc.localDescription.sdp}));ov(L.i,'Conectando o vídeo…');})
+  .catch(function(e){ov(L.i,'Erro ao abrir o vídeo: '+(e&&e.message||e));});}
+function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}var v=$('vid-'+L.i);if(v)v.srcObject=null;}
+function stopLive(msg){var L=LIVE;if(!L)return;L.done=true;LIVE=null;clearTimeout(L.timer);
+ try{L.ws.send(JSON.stringify({t:'stop'}));}catch(e){}try{L.ws.close();}catch(e){}dropPc(L);
+ var b=$('pb-'+L.i);if(b)b.textContent='▶ Ver ao vivo';ov(L.i,msg||'📷 Toque em “Ver ao vivo”');}
+document.addEventListener('visibilitychange',function(){if(document.hidden&&LIVE)stopLive('Pausado ao sair do app. Toque para ver de novo.');});
 
 /* instalar na tela de início */
 var deferred=null;

@@ -7,7 +7,8 @@
  *  Aba "Arquivos" (subir/apagar no R2): só FILE_ADMINS.
  */
 
-import { handleClient, handleMonitorStaff } from './cliente.js';
+import { handleClient, handleMonitorStaff, handleCarWs } from './cliente.js';
+export { CarHub } from './cliente.js';
 
 const USERS = ['euler', 'luis', 'richard'];
 const FILE_ADMINS = ['euler', 'luis'];
@@ -206,6 +207,8 @@ async function handle(request, env){
     const H = {json, hmacHex, hashPw, getCar, putCar, getSeen, fmt};
     const cres = await handleClient(request, env, p, H);
     if(cres) return cres;
+    const wres = await handleCarWs(request, env, p, H);
+    if(wres) return wres;
 
     // painel
     if(p === '/' || p === '/index.html') return new Response(HTML, {headers:{'content-type':'text/html; charset=utf-8'}});
@@ -259,6 +262,7 @@ async function handle(request, env){
       let cmd = null; try { cmd = await getCmd(env, id); } catch(e){}
       const out = {status:c.status, wipe: c.status==='revoked' ? !!c.wipe : false, plan: c.plan||'basico', grupo: c.grupo||'byd_simples'};
       if(cmd) out.cmd = cmd.type;
+      if(c.mon === true) out.mon = true;   // câmeras ao vivo liberadas: o carro conecta no hub (/ws/car)
       // Canal de teste: só este carro recebe a versão de teste.
       try {
         if(await getTestFlag(env, id)){
