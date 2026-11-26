@@ -221,7 +221,8 @@ object LiveCam {
             params.degradationPreference = org.webrtc.RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
             tr.sender.setParameters(params)
         } catch (t: Throwable) { Log.w(TAG, "bitrate: ${t.message}") }
-        if (codec == "H264" || codec == "VP8" || codec == "VP9") preferCodec(tr, codec)
+        // Padrão H264: o codificador de hardware (OMX.qcom...avc) deu a melhor imagem no teste.
+        preferCodec(tr, if (codec == "VP8" || codec == "VP9") codec else "H264")
         return pc
     }
 
@@ -320,7 +321,13 @@ object LiveCam {
         helper = h; source = src; track = trk
         h.setTextureSize(1280, 720)
         src.capturerObserver.onCapturerStarted(true)
-        h.startListening { frame -> frames.incrementAndGet(); source?.capturerObserver?.onFrameCaptured(frame) }
+        // A câmera da BYD não avança o horário dos quadros: o WebRTC achava que eram repetidos e descartava
+        // tudo depois do 1º (vídeo congelado, "envia 0 q/s"). Carimbamos cada quadro com o relógio do carro.
+        h.startListening { frame ->
+            frames.incrementAndGet()
+            val stamped = org.webrtc.VideoFrame(frame.buffer, frame.rotation, System.nanoTime())
+            source?.capturerObserver?.onFrameCaptured(stamped)
+        }
         lastFrames = frames.get()
         main.removeCallbacks(statsTick); main.postDelayed(statsTick, 2000)
     }
@@ -348,7 +355,7 @@ object LiveCam {
         if (m != null) { w = m.groupValues[1].toInt(); hh = m.groupValues[2].toInt() }
         else if (defW > 0 && defH > 0) { w = defW; hh = defH }
         else if (tag in PANO) { w = 5120; hh = 960 }
-        else { w = 1280; hh = 960 }   // a câmera não informa o tamanho (0x0); 4:3 foi o que funcionou no Dolphin
+        else { w = 720; hh = 576 }    // a câmera não informa o tamanho (0x0); 720x576 com H264 foi a melhor imagem no Dolphin
         if (m != null || defW <= 0 || defH <= 0) try { method(cls, "setPreviewSize", 2)?.invoke(obj, w, hh) } catch (_: Throwable) {}
         sizeMode = if (m != null) size else "auto"
         // O buffer da imagem PRECISA ter o mesmo tamanho que a câmera desenha (senão não chega quadro).
