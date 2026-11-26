@@ -666,8 +666,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Ar
 <div id="detail" class="modal-ov" style="display:none"><div class="modal"><div class="mtop" style="margin-bottom:10px">
 <div style="flex:1"><h3 id="d-name">—</h3><p class="sub" id="d-id">ID —</p></div><button class="modal-x" onclick="closeDetail()">✕ Fechar</button></div>
 <div id="d-head" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px"></div>
-<div id="d-actions" style="margin-top:14px"></div>
-<div class="sec-title" style="margin:16px 0 2px">Histórico de alterações</div><div id="d-log"></div></div></div>
+<div class="ftabs" id="d-tabs" style="margin:12px 0 14px"></div>
+<div id="d-actions"></div></div></div>
 <div id="files" class="modal-ov" style="display:none"><div class="modal wide"><div class="mtop" style="margin-bottom:12px">
 <div style="flex:1"><h3>Armazenamento (R2)</h3><p class="sub">O que está guardado no Cloudflare. Para adicionar apps e arquivos, use a aba Loja.</p></div><button class="modal-x" onclick="closeFiles()">✕ Fechar</button></div>
 <div class="ftabs" id="f-tabs"></div>
@@ -746,7 +746,7 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  document.getElementById('d-id').textContent='ID '+c.id+'  ·  registrado '+c.reg+'  ·  visto '+c.seen;
  document.getElementById('d-head').innerHTML=badge(c.status)+(c.status==="active"?' '+planBadge(c.plan)+' '+grupoBadge(c.grupo):'')+' '+verBadge(c)+' '+androidBadge(c)+' '+(c.owner?('Responsável: '+respChip(c.owner)):'<span style="color:var(--faint);font-size:12px">sem responsável</span>');
  chosenPlan=c.plan||'basico'; chosenGrupo=c.grupo||'byd_simples';
- var h=planPicker(chosenPlan);
+ var T={};var h=planPicker(chosenPlan);
  if(c.ask) h+=groupPicker(chosenGrupo);
  else h+='<div class="sec-title" style="margin:2px 0 12px">Pacote: <span style="color:var(--text)">'+grupoName(c.grupo||'byd_simples')+'</span> <span style="color:var(--faint);font-weight:400">· definido pelo modelo</span></div>';
  h+='<div id="plan-prev" style="margin:-4px 0 14px"></div>';
@@ -754,9 +754,10 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  else if(c.status==='active'){ h+='<button class="btn btn-reapprove" style="width:100%;margin-bottom:8px" onclick="activate(\\''+c.id+'\\')">Salvar plano</button>';
    h+='<button class="btn btn-revoke" style="width:100%" onclick="openRevoke(\\''+c.id+'\\')">Revogar acesso</button>'; }
  else h+='<button class="btn btn-reapprove" style="width:100%" onclick="activate(\\''+c.id+'\\')">Reativar com este plano</button>';
+ T.plano=h;h='';
  if(c.allowRemove) h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px;margin-top:10px">Remoção de Device Owner autorizada — aguardando o carro aplicar.</div>';
  else h+='<button class="btn" style="width:100%;margin-top:10px;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="allowRemoval(\\''+c.id+'\\')">Autorizar remoção de Device Owner</button>';
- h+='<div class="sec-title" style="margin:20px 0 6px">Device Owner <span style="color:var(--faint);font-weight:400">· via ADB</span></div>';
+ h+='<div class="sec-title" style="margin:16px 0 6px">Device Owner <span style="color:var(--faint);font-weight:400">· via ADB</span></div>';
  h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.deviceOwner===true?('<span style="color:#27c08a;font-weight:650">● Ativo</span>'+(c.doWhen?' <span style="color:var(--faint)">· '+c.doWhen+'</span>':'')):(c.deviceOwner===false?'<span style="color:#f2c25b">○ Sem Device Owner</span>':'<span style="color:var(--faint)">estado ainda não reportado pelo carro</span>'))+(c.doDetail?'<div style="color:var(--faint);font-size:11.5px;margin-top:3px">'+esc(c.doDetail)+'</div>':'')+'</div>';
  if(c.cmdPending==='set-do') h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px">Comando enviado — aguardando o carro aplicar. Abra o Unlock BYD no carro; se pedir, toque em "Sempre permitir".</div>';
  else if(c.deviceOwner!==true) h+='<button class="btn btn-approve" style="width:100%" onclick="setDo(\\''+c.id+'\\')">Setar Device Owner</button>';
@@ -764,19 +765,32 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  h+='<div style="font-size:12.5px;margin-bottom:8px;color:var(--faint)">Religa o início automático do app (abre a tela da BYD e liga o botão sozinho). Só funciona em carro já na versão nova.</div>';
  if(c.cmdPending==='enable-autostart') h+='<div style="color:#f2c25b;font-size:12.5px;background:var(--amber-bg);border:1px solid #5a470f;border-radius:10px;padding:10px 12px">Comando enviado — aguardando o carro religar o início automático.</div>';
  else h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border)" onclick="enableAutostart(\\''+c.id+'\\')">Reativar início automático</button>';
- h+='<div class="sec-title" style="margin:20px 0 6px">Monitoramento <span style="color:var(--faint);font-weight:400">· app do cliente</span></div><div id="d-mon" style="font-size:12.5px;color:var(--faint)">Carregando…</div>';
- h+='<div class="sec-title" style="margin:20px 0 6px">Canal de teste</div>';
+ T.dono=h;h='';
+ h+='<div class="sec-title" style="margin:0 0 6px">Monitoramento <span style="color:var(--faint);font-weight:400">· app do cliente</span></div><div id="d-mon" style="font-size:12.5px;color:var(--faint)">Carregando…</div>';
+ T.mon=h;h='';
+ h+='<div class="sec-title" style="margin:0 0 6px">Canal de teste</div>';
  h+='<div style="font-size:12.5px;margin-bottom:8px">'+(c.test?('<span style="color:#f5a623;font-weight:650">● Recebe a versão de teste</span>'+(testLatest?(' <span style="color:var(--faint)">(v'+testLatest+(c.vc?(c.vc>=testLatest?' — já atualizado':' — carro na v'+c.vc):'')+')</span>'):'')):'<span style="color:var(--faint)">usa a versão normal</span>')+'</div>';
  if(c.test) h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="setTest(\\''+c.id+'\\',false)">Tirar do canal de teste</button>';
  else h+='<button class="btn" style="width:100%;background:var(--surface2);color:#f5a623;border:1px solid #5a470f" onclick="setTest(\\''+c.id+'\\',true)">Atualizar este carro para a versão de teste</button>';
  h+='<button class="btn" style="width:100%;margin-top:18px;background:transparent;border:1px solid var(--red);color:var(--red)" onclick="askDelete(\\''+c.id+'\\')">Excluir veículo</button>';
+ T.teste=h;h='';
  if(c.au&&c.au.length){h+='<div class="sec-title" style="margin:16px 0 4px">Atualizações automáticas recentes</div>'+c.au.map(function(x){return '<div class="logrow"><span class="logby">'+esc(x.p)+'</span><span class="logwhen">'+x.when+'</span></div>';}).join('');}
  else if(c.vc>=14){h+='<div style="font-size:11.5px;color:var(--faint);margin-top:14px">Nenhuma atualização automática de apps registrada.</div>';}
- document.getElementById('d-actions').innerHTML=h;
+ T.plano+=h;
+ T.hist='<div id="d-log"></div>';
+ // Abas: abre na última usada (fica nela depois de uma ação que reabre a ficha).
+ var TABS=[['plano','Assinatura'],['mon','Monitoramento'],['dono','Device Owner'],['hist','Histórico'],['teste','Teste · Excluir']];
+ if(DCAR!==c.id){DCAR=c.id;DTAB='plano';}
+ if(!DTAB||!T[DTAB])DTAB='plano';
+ document.getElementById('d-tabs').innerHTML=TABS.map(function(t){return '<span class="chip'+(t[0]===DTAB?' on':'')+'" data-t="'+t[0]+'" onclick="detailTab(\\''+t[0]+'\\')">'+t[1]+'</span>';}).join('');
+ document.getElementById('d-actions').innerHTML=TABS.map(function(t){return '<div class="dpane" data-t="'+t[0]+'" style="display:'+(t[0]===DTAB?'block':'none')+'">'+T[t[0]]+'</div>';}).join('');
  var log=(c.log||[]).slice().reverse();var dl=document.getElementById('d-log');
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}
  else{dl.innerHTML=log.map(function(e){var col=userColor(e.by);return '<div class="logrow"><span class="logact '+e.cls+'">'+e.acao+'</span><span class="logby">por <span style="color:'+col+';font-weight:650">'+e.by+'</span></span><span class="logwhen">'+e.when+'</span></div>';}).join('');}
  document.getElementById('detail').style.display='flex';planPreview();loadMon(c.id);}
+var DTAB='plano',DCAR=null;
+function detailTab(t){DTAB=t;document.querySelectorAll('#d-tabs .chip').forEach(function(x){x.classList.toggle('on',x.getAttribute('data-t')===t);});
+ document.querySelectorAll('#d-actions .dpane').forEach(function(x){x.style.display=x.getAttribute('data-t')===t?'block':'none';});}
 var monCodeTimer=null;
 function loadMon(id){var el=document.getElementById('d-mon');if(!el)return;
  api('/api/monitor?id='+encodeURIComponent(id)).then(function(m){var h='';
