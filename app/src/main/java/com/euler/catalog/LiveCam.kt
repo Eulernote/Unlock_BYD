@@ -45,6 +45,13 @@ object LiveCam {
     private const val MAX_SESSION_MS = 10 * 60 * 1000L   // trava de segurança no carro: 10 min por sessão
     private val PRIORITY = arrayOf("rvs", "rear", "front", "pano_h", "pano_l", "byd_apa", "apa", "rf")
     private val PANO = setOf("pano_h", "pano_l", "byd_apa", "apa")
+    private val PANO_ORDER = listOf("pano_h", "pano_l", "byd_apa", "apa")
+    // Visões do 360. Na faixa de 4 câmeras (ex.: 5120x960) a ordem, da esquerda p/ direita, é
+    // ré | esquerda | direita | frente (mesma do Overdrive). Em câmera 2x2: frente TL, direita TR, ré BL, esquerda BR.
+    private val STRIP_OFF = mapOf("v:front" to 0.75f, "v:right" to 0.5f, "v:rear" to 0.0f, "v:left" to 0.25f)
+    private val GRID_Q = mapOf("v:front" to intArrayOf(0, 0), "v:right" to intArrayOf(1, 0), "v:rear" to intArrayOf(0, 1), "v:left" to intArrayOf(1, 1))
+    private const val TILE_MAX_W = 960
+    private const val GRID360_W = 1920   // 360: as 4 câmeras lado a lado em 1920 de largura (o celular monta a grade 2x2)
 
     private val exec = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
@@ -56,6 +63,8 @@ object LiveCam {
     private var helper: SurfaceTextureHelper? = null
     private var avm: Any? = null
     private var camLabel = ""
+    @Volatile private var viewKey = ""   // "" = imagem inteira; "v:front"... = recorte de uma câmera do 360
+    private var camKey = ""              // o que o celular escolheu (tag real ou "v:...")
     private var camW = 0
     private var camH = 0
     private var defW = 0
@@ -74,7 +83,7 @@ object LiveCam {
         try {
             ensureFactory(ctx.applicationContext)
             ensurePipeline()
-            if (avm == null || (cam != "auto" && cam != camLabel) || size != sizeMode) openAvm(cam, size)
+            selectCam(cam, size)
             stopPeer(v, closeCamIfIdle = false)
             val pc = createPeer(v, ice, codec, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
             peers[v] = Peer(pc, send)
@@ -106,7 +115,7 @@ object LiveCam {
     fun switchCam(v: String, cam: String, size: String) = exec.execute {
         val p = peers[v] ?: return@execute
         try {
-            openAvm(cam, size)
+            selectCam(cam, size)
             for ((k, peer) in peers) peer.send(info(k))
         } catch (t: Throwable) {
             Log.e(TAG, "switch", t)
@@ -127,8 +136,14 @@ object LiveCam {
 
     private fun info(v: String): JSONObject {
         val cams = JSONArray(); for (c in listCams()) cams.put(c)
-        return JSONObject().put("t", "info").put("v", v).put("cam", camLabel).put("w", camW).put("h", camH)
+        val o = JSONObject().put("t", "info").put("v", v).put("cam", camKey.ifEmpty { camLabel }).put("real", camLabel).put("w", camW).put("h", camH)
             .put("size", sizeMode).put("def", "${defW}x$defH").put("cams", cams)
+        // 360 em faixa: o celular monta a grade 2x2 com estas posições (fração da largura de cada câmera na faixa).
+        if (camKey == "v:360" && isStrip()) {
+            val t = JSONObject(); for ((k, off) in STRIP_OFF) t.put(k, off.toDouble())
+            o.put("layout", "strip4").put("tiles", t)
+        } else if (camKey == "v:360") o.put("layout", "grid")
+        return o
     }
 
     // contador de quadros: o carro manda a cada 2 s quantos quadros a câmera entregou (diagnóstico de tela preta)
@@ -303,8 +318,12 @@ object LiveCam {
     }
 
     /** Câmeras que o carro declara (tags da BYD) + ids crus 0..5 pra testar uma a uma. */
+    private fun panoTag(): String? = PANO_ORDER.firstOrNull { cameraId(it) >= 0 }
+    private fun isStrip() = camH > 0 && camW.toFloat() / camH > 2.5f
+
     private fun listCams(): List<String> {
         val out = ArrayList<String>(); val ids = HashSet<Int>()
+        if (panoTag() != null) out.addAll(listOf("v:360", "v:front", "v:rear", "v:left", "v:right"))
         for (t in PRIORITY + arrayOf("dms", "face", "d954_h_m", "d954_h_s", "d954_l_m", "d954_l_s")) {
             val id = cameraId(t); if (id >= 0 && t !in out) { out += t; ids += id }
         }
@@ -325,11 +344,64 @@ object LiveCam {
         // tudo depois do 1º (vídeo congelado, "envia 0 q/s"). Carimbamos cada quadro com o relógio do carro.
         h.startListening { frame ->
             frames.incrementAndGet()
-            val stamped = org.webrtc.VideoFrame(frame.buffer, frame.rotation, System.nanoTime())
-            source?.capturerObserver?.onFrameCaptured(stamped)
+            val r = viewRect(viewKey, frame.buffer.width, frame.buffer.height)
+            if (r != null) {
+                // Uma câmera só do 360: recorta o pedaço dela (barato: é só a matriz da textura) e escala.
+                val ow = minOf(TILE_MAX_W, r[2]); val oh = (ow.toLong() * r[3] / r[2]).toInt() / 2 * 2
+                val b = frame.buffer.cropAndScale(r[0], r[1], r[2], r[3], ow, oh)
+                try { source?.capturerObserver?.onFrameCaptured(org.webrtc.VideoFrame(b, frame.rotation, System.nanoTime())) }
+                finally { b.release() }
+            } else {
+                val stamped = org.webrtc.VideoFrame(frame.buffer, frame.rotation, System.nanoTime())
+                source?.capturerObserver?.onFrameCaptured(stamped)
+            }
         }
         lastFrames = frames.get()
         main.removeCallbacks(statsTick); main.postDelayed(statsTick, 2000)
+    }
+
+    /** Recorte (x, y, largura, altura) de uma câmera dentro da imagem do 360, ou null = imagem inteira. */
+    private fun viewRect(key: String, fw: Int, fh: Int): IntArray? {
+        if (key.isEmpty() || fw <= 0 || fh <= 0) return null
+        return if (fw.toFloat() / fh > 2.5f) {
+            val off = STRIP_OFF[key] ?: return null
+            val cw = fw / 4
+            intArrayOf((fw * off).toInt().coerceIn(0, fw - cw), 0, cw, fh)
+        } else {
+            val q = GRID_Q[key] ?: return null
+            intArrayOf(q[0] * fw / 2, q[1] * fh / 2, fw / 2, fh / 2)
+        }
+    }
+
+    /** Escolhe câmera real ou visão do 360 (frente/ré/esquerda/direita/360) sem reabrir a câmera à toa. */
+    private fun selectCam(want0: String, size: String) {
+        val pano = panoTag()
+        val want = if ((want0 == "auto" || want0.isBlank()) && pano != null) "v:360" else want0
+        if (want.startsWith("v:")) {
+            val base = pano ?: throw IllegalStateException("este carro não tem câmera 360")
+            if (avm == null || camLabel != base || size != sizeMode) openAvm(base, size)
+            viewKey = if (want == "v:360") "" else want
+            camKey = want
+        } else {
+            if (avm == null || (want != "auto" && want != camLabel) || size != sizeMode) openAvm(want, size)
+            viewKey = ""; camKey = camLabel
+        }
+        applyAdapt()
+    }
+
+    private fun applyAdapt() {
+        val w = camW; val h = camH
+        if (w <= 0 || h <= 0) return
+        if (viewKey.isNotEmpty()) {
+            val strip = isStrip()
+            val tw = if (strip) w / 4 else w / 2; val th = if (strip) h else h / 2
+            val ow = minOf(TILE_MAX_W, tw); val oh = (ow.toLong() * th / tw).toInt() / 2 * 2
+            source?.adaptOutputFormat(ow, oh, OUT_FPS)
+        } else if (isStrip()) {
+            val ow = minOf(w, GRID360_W); source?.adaptOutputFormat(ow, (ow.toLong() * h / w).toInt().coerceAtLeast(90) / 2 * 2, OUT_FPS)
+        } else {
+            val ow = minOf(w, OUT_W); source?.adaptOutputFormat(ow, (ow.toLong() * h / w).toInt().coerceAtLeast(90) / 2 * 2, OUT_FPS)
+        }
     }
 
     private fun openAvm(want: String, size: String) {
@@ -371,10 +443,7 @@ object LiveCam {
         if (!bound) throw IllegalStateException("não consegui ligar a imagem da câmera")
         if (method(cls, "startPreview", 0)?.invoke(obj) == false) throw IllegalStateException("startPreview falhou")
         camW = w; camH = hh; camLabel = tag
-        // Saída: até 1280 de largura mantendo a proporção (faixa panorâmica: até 1920).
-        val maxW = if (w.toFloat() / hh > 2.5f) 1920 else OUT_W
-        val ow = minOf(w, maxW); val oh = (ow.toLong() * hh / w).toInt().coerceAtLeast(90) / 2 * 2
-        source?.adaptOutputFormat(ow, oh, OUT_FPS)
+        viewKey = ""; camKey = tag
         Log.i(TAG, "câmera $tag (id $id) ${w}x$hh (padrão ${defW}x$defH) aberta")
     }
 
@@ -395,7 +464,7 @@ object LiveCam {
         try { track?.dispose() } catch (_: Throwable) {}
         try { source?.dispose() } catch (_: Throwable) {}
         try { helper?.dispose() } catch (_: Throwable) {}
-        track = null; source = null; helper = null; camLabel = ""
+        track = null; source = null; helper = null; camLabel = ""; camKey = ""; viewKey = ""
         if (had) Log.i(TAG, "câmera fechada")
     }
 
