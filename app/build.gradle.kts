@@ -20,8 +20,8 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 61
-        versionName = "6.8"
+        versionCode = 62
+        versionName = "6.9"
         // WebRTC (câmeras ao vivo) traz bibliotecas nativas: só ARM (as multimídias são ARM), APK menor.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }

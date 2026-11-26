@@ -58,21 +58,26 @@ object LiveCam {
     private var camLabel = ""
     private var camW = 0
     private var camH = 0
+    private var defW = 0
+    private var defH = 0
+    private var sizeMode = "auto"
 
-    private class Peer(val pc: PeerConnection, var offerSent: Boolean = false)
+    private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false)
     private val peers = HashMap<String, Peer>()
     private val timeouts = HashMap<String, Runnable>()
 
     @Volatile var lastStatus = "parado"; private set
 
     // ---------------- API usada pelo MonitorService ----------------
-    fun start(ctx: Context, v: String, ice: JSONArray?, send: (JSONObject) -> Unit) = exec.execute {
+    /** cam: "auto", uma tag da BYD ("rvs", "front", "pano_h"…) ou "id:N". size: "auto" ou "LxA" (ex.: "1280x720"). */
+    fun start(ctx: Context, v: String, ice: JSONArray?, cam: String, size: String, send: (JSONObject) -> Unit) = exec.execute {
         try {
             ensureFactory(ctx.applicationContext)
-            ensureCamera()
+            ensurePipeline()
+            if (avm == null || (cam != "auto" && cam != camLabel) || size != sizeMode) openAvm(cam, size)
             stopPeer(v, closeCamIfIdle = false)
             val pc = createPeer(v, ice, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
-            peers[v] = Peer(pc)
+            peers[v] = Peer(pc, send)
             pc.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(sdp: SessionDescription) {
                     exec.execute {
@@ -89,11 +94,24 @@ object LiveCam {
             }, MediaConstraints())
             val t = Runnable { exec.execute { send(JSONObject().put("t", "error").put("v", v).put("msg", "tempo máximo da sessão")); stopPeer(v) } }
             timeouts[v] = t; main.postDelayed(t, MAX_SESSION_MS)
-            send(JSONObject().put("t", "info").put("v", v).put("cam", camLabel).put("w", camW).put("h", camH))
+            send(info(v))
             lastStatus = "transmitindo ($camLabel ${camW}x$camH) p/ ${peers.size}"
         } catch (t: Throwable) {
             Log.e(TAG, "start", t)
             fail(v, send, msgOf(t))
+        }
+    }
+
+    /** Troca de câmera/resolução sem refazer a conexão: reabre a câmera na mesma trilha de vídeo. */
+    fun switchCam(v: String, cam: String, size: String) = exec.execute {
+        val p = peers[v] ?: return@execute
+        try {
+            openAvm(cam, size)
+            for ((k, peer) in peers) peer.send(info(k))
+        } catch (t: Throwable) {
+            Log.e(TAG, "switch", t)
+            p.send(JSONObject().put("t", "error").put("v", v).put("msg", "câmera $cam: ${msgOf(t)}"))
+            try { p.send(info(v)) } catch (_: Throwable) {}
         }
     }
 
@@ -106,6 +124,26 @@ object LiveCam {
 
     fun stop(v: String) = exec.execute { stopPeer(v) }
     fun stopAll() = exec.execute { for (k in peers.keys.toList()) stopPeer(k, closeCamIfIdle = false); closeCamera() }
+
+    private fun info(v: String): JSONObject {
+        val cams = JSONArray(); for (c in listCams()) cams.put(c)
+        return JSONObject().put("t", "info").put("v", v).put("cam", camLabel).put("w", camW).put("h", camH)
+            .put("size", sizeMode).put("def", "${defW}x$defH").put("cams", cams)
+    }
+
+    // contador de quadros: o carro manda a cada 2 s quantos quadros a câmera entregou (diagnóstico de tela preta)
+    private val frames = java.util.concurrent.atomic.AtomicInteger(0)
+    private var lastFrames = 0
+    private val statsTick = object : Runnable {
+        override fun run() {
+            exec.execute {
+                if (avm == null) return@execute
+                val n = frames.get(); val fps = (n - lastFrames) / 2; lastFrames = n
+                for ((k, peer) in peers) peer.send(JSONObject().put("t", "stats").put("v", k).put("fps", fps).put("total", n))
+                main.postDelayed(this, 2000)
+            }
+        }
+    }
 
     // ---------------- internos ----------------
     private fun fail(v: String, send: (JSONObject) -> Unit, msg: String) {
@@ -208,25 +246,43 @@ object LiveCam {
     private fun method(cls: Class<*>, name: String, argc: Int): Method? =
         (cls.methods + cls.declaredMethods).firstOrNull { it.name == name && it.parameterTypes.size == argc }?.also { it.isAccessible = true }
 
-    private fun pickCamera(): Pair<String, Int> {
-        val info = bydClass("android.hardware.BmmCameraInfo")
-        val getId = info?.let { method(it, "getCameraId", 1) }
-        if (getId != null) for (tag in PRIORITY) {
-            val id = try { getId.invoke(null, tag) as? Int ?: -1 } catch (_: Throwable) { -1 }
-            if (id >= 0) return tag to id
-        }
-        return "id0" to 0
+    private fun cameraId(tag: String): Int {
+        if (tag.startsWith("id:")) return tag.substring(3).toIntOrNull() ?: -1
+        val info = bydClass("android.hardware.BmmCameraInfo") ?: return -1
+        val getId = method(info, "getCameraId", 1) ?: return -1
+        return try { getId.invoke(null, tag) as? Int ?: -1 } catch (_: Throwable) { -1 }
     }
 
-    private fun ensureCamera() {
-        if (avm != null) return
+    /** Câmeras que o carro declara (tags da BYD) + ids crus 0..5 pra testar uma a uma. */
+    private fun listCams(): List<String> {
+        val out = ArrayList<String>(); val ids = HashSet<Int>()
+        for (t in PRIORITY + arrayOf("dms", "face", "d954_h_m", "d954_h_s", "d954_l_m", "d954_l_s")) {
+            val id = cameraId(t); if (id >= 0 && t !in out) { out += t; ids += id }
+        }
+        for (i in 0..5) if (i !in ids) out += "id:$i"
+        return out
+    }
+
+    private fun ensurePipeline() {
+        if (helper != null) return
         val f = factory!!
         val h = SurfaceTextureHelper.create("unlock-cam", egl!!.eglBaseContext) ?: throw IllegalStateException("SurfaceTextureHelper")
         val src = f.createVideoSource(false)
         val trk = f.createVideoTrack("cam0", src)
         helper = h; source = src; track = trk
+        h.setTextureSize(1280, 720)
+        src.capturerObserver.onCapturerStarted(true)
+        h.startListening { frame -> frames.incrementAndGet(); source?.capturerObserver?.onFrameCaptured(frame) }
+        lastFrames = frames.get()
+        main.removeCallbacks(statsTick); main.postDelayed(statsTick, 2000)
+    }
 
-        val (tag, id) = pickCamera()
+    private fun openAvm(want: String, size: String) {
+        closeAvm()
+        val h = helper ?: throw IllegalStateException("pipeline")
+        val tag = if (want == "auto" || want.isBlank()) (PRIORITY.firstOrNull { cameraId(it) >= 0 } ?: "id:0") else want
+        val id = cameraId(tag)
+        if (id < 0) throw IllegalStateException("o carro não tem a câmera '$tag'")
         val cls = bydClass("android.hardware.AVMCamera") ?: throw IllegalStateException("este carro não tem a câmera da BYD (AVMCamera)")
         var obj: Any? = try { method(cls, "open", 1)?.invoke(null, id) } catch (_: Throwable) { null }
         if (obj == null || obj is Boolean) {
@@ -236,50 +292,55 @@ object LiveCam {
         }
         avm = obj
         try { method(cls, "setCameraFps", 1)?.invoke(obj, 25) } catch (_: Throwable) {}
-        // Mesma sequência validada no teste da v59 (setPreviewSize 5120x960 funcionou no Dolphin).
-        try { method(cls, "setPreviewSize", 2)?.invoke(obj, 5120, 960) } catch (_: Throwable) {}
-
+        // Tamanho padrão da câmera (antes de qualquer setPreviewSize).
+        defW = try { method(cls, "getPreviewWidth", 0)?.invoke(obj) as? Int ?: 0 } catch (_: Throwable) { 0 }
+        defH = try { method(cls, "getPreviewHeight", 0)?.invoke(obj) as? Int ?: 0 } catch (_: Throwable) { 0 }
+        var w: Int; var hh: Int
+        val m = Regex("^(\\d+)x(\\d+)$").find(size)
+        if (m != null) { w = m.groupValues[1].toInt(); hh = m.groupValues[2].toInt() }
+        else if (defW > 0 && defH > 0) { w = defW; hh = defH }
+        else { w = 1280; hh = 720 }
+        if (m != null || defW <= 0 || defH <= 0) try { method(cls, "setPreviewSize", 2)?.invoke(obj, w, hh) } catch (_: Throwable) {}
+        sizeMode = if (m != null) size else "auto"
+        // O buffer da imagem PRECISA ter o mesmo tamanho que a câmera desenha (senão não chega quadro).
+        h.setTextureSize(w, hh)
         val st: SurfaceTexture = h.surfaceTexture
-        h.setTextureSize(1280, 720)  // provisório; corrigido abaixo com o tamanho real
+        st.setDefaultBufferSize(w, hh)
         var bound = false
         for (mName in listOf("addTexture", "setTexture")) {
-            val m = (cls.methods + cls.declaredMethods).firstOrNull { it.name == mName && it.parameterTypes.size == 2 && it.parameterTypes[0] == SurfaceTexture::class.java } ?: continue
-            m.isAccessible = true
-            try { if (m.invoke(obj, st, 0) != false) bound = true } catch (_: Throwable) {}
+            val mm = (cls.methods + cls.declaredMethods).firstOrNull { it.name == mName && it.parameterTypes.size == 2 && it.parameterTypes[0] == SurfaceTexture::class.java } ?: continue
+            mm.isAccessible = true
+            try { if (mm.invoke(obj, st, 0) != false) bound = true } catch (_: Throwable) {}
         }
         if (!bound) throw IllegalStateException("não consegui ligar a imagem da câmera")
-        val ok = method(cls, "startPreview", 0)?.invoke(obj)
-        if (ok == false) throw IllegalStateException("startPreview falhou")
-
-        // Tamanho real que a câmera está entregando.
-        var w = try { method(cls, "getPreviewWidth", 0)?.invoke(obj) as? Int ?: 0 } catch (_: Throwable) { 0 }
-        var hh = try { method(cls, "getPreviewHeight", 0)?.invoke(obj) as? Int ?: 0 } catch (_: Throwable) { 0 }
-        if (w <= 0 || hh <= 0) { w = 1280; hh = 720 }
+        if (method(cls, "startPreview", 0)?.invoke(obj) == false) throw IllegalStateException("startPreview falhou")
         camW = w; camH = hh; camLabel = tag
-        h.setTextureSize(w, hh)
-        // Faixa panorâmica (4 câmeras lado a lado) fica muito larga: limita pela largura mantendo a proporção.
-        if (tag in PANO || w.toFloat() / hh > 2.5f) src.adaptOutputFormat(1920, (1920f * hh / w).toInt().coerceAtLeast(120) / 2 * 2, OUT_FPS)
-        else src.adaptOutputFormat(OUT_W, OUT_H, OUT_FPS)
-        src.capturerObserver.onCapturerStarted(true)
-        h.startListening { frame -> source?.capturerObserver?.onFrameCaptured(frame) }
-        Log.i(TAG, "câmera $tag (id $id) ${w}x$hh aberta")
+        // Saída: até 1280 de largura mantendo a proporção (faixa panorâmica: até 1920).
+        val maxW = if (w.toFloat() / hh > 2.5f) 1920 else OUT_W
+        val ow = minOf(w, maxW); val oh = (ow.toLong() * hh / w).toInt().coerceAtLeast(90) / 2 * 2
+        source?.adaptOutputFormat(ow, oh, OUT_FPS)
+        Log.i(TAG, "câmera $tag (id $id) ${w}x$hh (padrão ${defW}x$defH) aberta")
+    }
+
+    private fun closeAvm() {
+        val o = avm ?: return
+        avm = null
+        val c = o.javaClass
+        try { helper?.surfaceTexture?.let { st -> c.methods.firstOrNull { it.name == "rmTexture" && it.parameterTypes.size == 2 }?.invoke(o, st, 0) } } catch (_: Throwable) {}
+        for (n in listOf("stopPreview", "close")) try { method(c, n, 0)?.invoke(o) } catch (_: Throwable) {}
     }
 
     private fun closeCamera() {
-        val o = avm
-        avm = null
-        if (o != null) {
-            val c = o.javaClass
-            try { helper?.surfaceTexture?.let { st -> c.methods.firstOrNull { it.name == "rmTexture" && it.parameterTypes.size == 2 }?.invoke(o, st, 0) } } catch (_: Throwable) {}
-            for (n in listOf("stopPreview", "close")) try { method(c, n, 0)?.invoke(o) } catch (_: Throwable) {}
-        }
+        val had = avm != null
+        closeAvm()
+        main.removeCallbacks(statsTick)
         try { helper?.stopListening() } catch (_: Throwable) {}
         try { source?.capturerObserver?.onCapturerStopped() } catch (_: Throwable) {}
         try { track?.dispose() } catch (_: Throwable) {}
         try { source?.dispose() } catch (_: Throwable) {}
         try { helper?.dispose() } catch (_: Throwable) {}
-        track = null; source = null; helper = null
-        if (o != null) Log.i(TAG, "câmera fechada")
+        track = null; source = null; helper = null; camLabel = ""
+        if (had) Log.i(TAG, "câmera fechada")
     }
 
     private open class SdpAdapter : SdpObserver {
