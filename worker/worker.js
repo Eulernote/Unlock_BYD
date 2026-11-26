@@ -785,7 +785,7 @@ function loadMon(id){var el=document.getElementById('d-mon');if(!el)return;
    h+='<div id="mon-code"></div><button class="btn btn-approve" style="width:100%;margin-bottom:8px" onclick="genCode(\\''+id+'\\')">Gerar código de vínculo</button>';
    h+='<div style="margin:6px 0 4px;color:var(--muted)">Celulares vinculados ('+m.clients.length+')</div>';
    if(!m.clients.length)h+='<div style="color:var(--faint);margin-bottom:8px">Nenhum ainda.</div>';
-   m.clients.forEach(function(u){h+='<div class="logrow"><span class="logby" style="color:var(--text)">'+esc(u)+'</span><a href="#" style="color:var(--red);font-size:12px" onclick="monUnlink(\\''+id+'\\',\\''+encodeURIComponent(u)+'\\');return false">remover</a></div>';});
+   m.clients.forEach(function(u){h+='<div class="logrow"><span class="logby" style="color:var(--text)">'+esc(u)+((m.resets&&m.resets[u])?'<br><span style="color:#f2c25b;font-weight:650">🔑 pediu nova senha — código <b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:2px">'+m.resets[u].code+'</b></span>':'')+'</span><a href="#" style="color:var(--red);font-size:12px" onclick="monUnlink(\\''+id+'\\',\\''+encodeURIComponent(u)+'\\');return false">remover</a></div>';});
    h+='<div style="color:var(--faint);font-size:11.5px;margin:8px 0">Endereço do app do cliente: <b style="color:var(--text)">'+location.origin+'/c</b></div>';
    h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="monToggle(\\''+id+'\\',false)">Desligar monitoramento</button>';
   } else h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border)" onclick="monToggle(\\''+id+'\\',true)">Liberar monitoramento</button>';

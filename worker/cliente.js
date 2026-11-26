@@ -15,6 +15,8 @@ export { CarHub } from './hub.js';
 
 const CLIENT_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30;  // 30 dias: cara de app, sem pedir senha toda hora
 const PAIR_TTL_S = 600;                                 // código de vínculo vale 10 min
+const RESET_TTL_S = 24 * 60 * 60;   // código de nova senha vale 24 h
+const RESET_MAX_TRIES = 5;
 const PAIR_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sem 0/O/1/I/L pra não confundir
 
 function cleanUser(u){ return String(u || '').trim().toLowerCase(); }
@@ -73,7 +75,9 @@ export async function handleMonitorStaff(request, env, p, user, H){
     const m = await getMon(env, id);
     // Carros liberados antes do campo c.mon existir: sincroniza ao abrir a ficha no painel.
     try{ const c = await H.getCar(env, id); if(c && (c.mon === true) !== !!m.on){ c.mon = !!m.on; await H.putCar(env, c); } }catch(e){}
-    return H.json({on: !!m.on, clients: m.clients || []});
+    const resets = {};
+    for(const u of (m.clients || [])){ try{ const r = await env.KV.get('reset:' + u, {type:'json'}); if(r) resets[u] = {code: r.code, at: r.at}; }catch(e){} }
+    return H.json({on: !!m.on, clients: m.clients || [], resets});
   }
   const b = await request.json().catch(() => ({}));
   const id = String(b.id || '').trim();
@@ -192,6 +196,67 @@ export async function handleClient(request, env, p, H){
     return H.json({token: await makeClientToken(H, env.SECRET, user), user: user});
   }
 
+  // --- esqueci a senha: 1) pede (gera código p/ a equipe)  2) confere o código  3) grava a senha nova ---
+  if(p === '/c/api/reset-request' && request.method === 'POST'){
+    const b = await request.json().catch(() => ({}));
+    const user = cleanUser(b.user);
+    // Resposta sempre igual: não revela se o usuário existe.
+    const cli = validUser(user) ? await getCli(env, user) : null;
+    if(cli){
+      const prev = await env.KV.get('reset:' + user, {type:'json'});
+      // Evita gerar um código novo a cada toque (o anterior continua valendo por 24 h).
+      if(!prev || Date.now() - (prev.at || 0) > 10 * 60 * 1000){
+        const rnd = new Uint32Array(1); crypto.getRandomValues(rnd);
+        const code = String(10000 + (rnd[0] % 90000));
+        await env.KV.put('reset:' + user, JSON.stringify({code, at: Date.now(), tries: 0}), {expirationTtl: RESET_TTL_S});
+        for(const id of (cli.cars || [])){
+          try{ const c = await H.getCar(env, id); if(c){ c.log.push({acao: 'Cliente ' + user + ' pediu nova senha (código ' + code + ')', by: 'cliente', when: H.fmt(Date.now()), cls: 'a-rev'}); await H.putCar(env, c); } }catch(e){}
+        }
+      }
+    }
+    return H.json({ok: true});
+  }
+  if(p === '/c/api/reset-verify' && request.method === 'POST'){
+    const b = await request.json().catch(() => ({}));
+    const user = cleanUser(b.user), code = String(b.code || '').replace(/\D/g, '');
+    const r = user ? await env.KV.get('reset:' + user, {type:'json'}) : null;
+    if(!r) return H.json({error: 'Código inválido ou expirado. Peça um novo.'}, 400);
+    if(r.code !== code){
+      r.tries = (r.tries || 0) + 1;
+      if(r.tries >= RESET_MAX_TRIES){ await env.KV.delete('reset:' + user); return H.json({error: 'Código errado muitas vezes. Peça um novo código.'}, 400); }
+      await env.KV.put('reset:' + user, JSON.stringify(r), {expirationTtl: RESET_TTL_S});
+      return H.json({error: 'Código incorreto. Restam ' + (RESET_MAX_TRIES - r.tries) + ' tentativas.'}, 400);
+    }
+    // Código certo: libera a troca por 15 min (token assinado, uso único junto com o código).
+    const exp = Date.now() + 15 * 60 * 1000;
+    const body = 'r|' + user + '|' + r.code + '|' + exp;
+    return H.json({rt: btoa(body) + '.' + (await H.hmacHex(env.SECRET, body))});
+  }
+  if(p === '/c/api/reset-set' && request.method === 'POST'){
+    const b = await request.json().catch(() => ({}));
+    const pass = String(b.pass || '');
+    let user = null, code = null;
+    try{
+      const parts = String(b.rt || '').split('.'); const body = atob(parts[0]);
+      if(parts.length === 2 && parts[1] === await H.hmacHex(env.SECRET, body)){
+        const f = body.split('|'); if(f[0] === 'r' && Number(f[3]) > Date.now()){ user = f[1]; code = f[2]; }
+      }
+    }catch(e){}
+    if(!user) return H.json({error: 'O tempo para trocar a senha acabou. Comece de novo.'}, 400);
+    const r = await env.KV.get('reset:' + user, {type:'json'});
+    if(!r || r.code !== code) return H.json({error: 'Este código já foi usado. Peça um novo.'}, 400);
+    if(pass.length < 8) return H.json({error: 'A senha precisa ter pelo menos 8 caracteres'}, 400);
+    const cli = await getCli(env, user);
+    if(!cli) return H.json({error: 'Usuário não encontrado'}, 400);
+    cli.hash = await clientHash(H, env, user, pass); cli.resetAt = Date.now();
+    await putCli(env, user, cli);
+    await env.KV.delete('reset:' + user);
+    for(const id of (cli.cars || [])){
+      try{ const c = await H.getCar(env, id); if(c){ c.log.push({acao: 'Cliente ' + user + ' criou senha nova', by: 'cliente', when: H.fmt(Date.now()), cls: 'a-act'}); await H.putCar(env, c); } }catch(e){}
+    }
+    return H.json({token: await makeClientToken(H, env.SECRET, user), user: user});
+  }
+
   if(p === '/c/api/login' && request.method === 'POST'){
     const b = await request.json().catch(() => ({}));
     const user = cleanUser(b.user), pass = String(b.pass || '');
@@ -255,7 +320,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-7';
+const V = 'ubyd-c-8';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -331,6 +396,24 @@ select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-ra
   </form>
   <div class="err" id="le"></div>
   <button class="link" onclick="show('pair')">Primeiro acesso? Vincular meu carro</button>
+  <button class="link" style="color:var(--mu);padding-top:6px" onclick="startForgot()">Esqueci minha senha</button>
+</div>
+
+<!-- ESQUECI A SENHA -->
+<div id="v-forgot" class="card hide">
+  <h2>Nova senha</h2>
+  <div id="fg1"><p class="sub">Digite o seu usuário. A Unlock BYD vai receber um código de 5 dígitos e te passar depois de confirmar que é você.</p>
+    <label>Usuário (e-mail ou telefone)</label><input id="fu" type="text" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <button class="btn btn-p" id="fb1" onclick="fgRequest()">Pedir código</button></div>
+  <div id="fg2" class="hide"><p class="sub">Pedido enviado. Fale com a Unlock BYD para receber o <b>código de 5 dígitos</b> e digite abaixo.</p>
+    <label>Código</label><input id="fc" class="code" type="text" inputmode="numeric" maxlength="5" placeholder="00000">
+    <button class="btn btn-p" id="fb2" onclick="fgVerify()">Confirmar código</button></div>
+  <div id="fg3" class="hide"><p class="sub">Código confirmado. Crie a sua senha nova.</p>
+    <label>Nova senha (mín. 8 caracteres)</label><input id="fp1" type="password" autocomplete="new-password">
+    <label>Confirme a senha</label><input id="fp2" type="password" autocomplete="new-password">
+    <button class="btn btn-p" id="fb3" onclick="fgSet()">Salvar senha nova</button></div>
+  <div class="err" id="fe"></div>
+  <button class="link" onclick="show('login')">Voltar para o login</button>
 </div>
 
 <!-- VINCULAR -->
@@ -360,7 +443,7 @@ select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-ra
 var T=null,U=null,CARS=[];var DIAG=/[?&]diag=1/.test(location.search);try{T=localStorage.getItem('ubyd_c_token');U=localStorage.getItem('ubyd_c_user');}catch(e){}
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function show(v){['login','pair','home'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home')loadMe();}
+function show(v){['login','pair','home','forgot'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home')loadMe();}
 function save(t,u){T=t;U=u;try{localStorage.setItem('ubyd_c_token',t);localStorage.setItem('ubyd_c_user',u);}catch(e){}}
 function logout(){T=null;U=null;try{localStorage.removeItem('ubyd_c_token');localStorage.removeItem('ubyd_c_user');}catch(e){}show('login');}
 function api(path,body){return fetch(path,{method:body?'POST':'GET',headers:Object.assign({'Content-Type':'application/json'},T?{'Authorization':'Bearer '+T}:{}),body:body?JSON.stringify(body):undefined})
@@ -396,6 +479,18 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
   }).join('');
  }).catch(function(x){$('cars').innerHTML='<div class="card"><div class="err">'+esc(x.message)+'</div><button class="btn btn-g" onclick="loadMe()">Tentar de novo</button></div>';});}
 function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste login?'))return;api('/c/api/unlink',{car:c.id}).then(loadMe).catch(function(x){alert(x.message);});}
+
+/* esqueci a senha */
+var FG={u:'',rt:''};
+function fgStep(n){[1,2,3].forEach(function(k){$('fg'+k).classList.toggle('hide',k!==n);});$('fe').textContent='';}
+function startForgot(){FG={u:'',rt:''};$('fu').value=$('lu').value||'';$('fc').value='';$('fp1').value='';$('fp2').value='';fgStep(1);show('forgot');}
+function fgRequest(){var u=($('fu').value||'').trim().toLowerCase();if(u.length<3){$('fe').textContent='Digite o seu usuário.';return;}var b=$('fb1');busy(b,true,'Enviando…');
+ api('/c/api/reset-request',{user:u}).then(function(){FG.u=u;fgStep(2);}).catch(function(x){$('fe').textContent=x.message;}).then(function(){busy(b,false,'Pedir código');});}
+function fgVerify(){var c=($('fc').value||'').replace(/[^0-9]/g,'');if(c.length!==5){$('fe').textContent='O código tem 5 dígitos.';return;}var b=$('fb2');busy(b,true,'Conferindo…');
+ api('/c/api/reset-verify',{user:FG.u,code:c}).then(function(r){FG.rt=r.rt;fgStep(3);}).catch(function(x){$('fe').textContent=x.message;}).then(function(){busy(b,false,'Confirmar código');});}
+function fgSet(){var p1=$('fp1').value,p2=$('fp2').value;if(p1.length<8){$('fe').textContent='A senha precisa ter pelo menos 8 caracteres.';return;}if(p1!==p2){$('fe').textContent='As duas senhas não são iguais.';return;}
+ var b=$('fb3');busy(b,true,'Salvando…');
+ api('/c/api/reset-set',{rt:FG.rt,pass:p1}).then(function(r){save(r.token,r.user);$('fp1').value='';$('fp2').value='';show('home');}).catch(function(x){$('fe').textContent=x.message;}).then(function(){busy(b,false,'Salvar senha nova');});}
 
 /* câmeras ao vivo (WebRTC) */
 var LIVE=null;
