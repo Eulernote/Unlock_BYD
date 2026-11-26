@@ -18,19 +18,20 @@
 
 const MAX_VIEWERS = 3;
 let iceCache = null;  // {at, servers} — por isolate
+export let iceErr = '';  // motivo da última falha ao gerar o TURN (aparece na página de teste)
 
 /** STUN sempre; TURN da Cloudflare quando os segredos TURN_KEY_ID / TURN_KEY_TOKEN existem no Worker. */
 export async function iceServers(env){
   const stun = [{urls: ['stun:stun.cloudflare.com:3478']}];
-  if(!env.TURN_KEY_ID || !env.TURN_KEY_TOKEN) return stun;
+  if(!env.TURN_KEY_ID || !env.TURN_KEY_TOKEN){ iceErr = 'segredos TURN_KEY_ID/TURN_KEY_TOKEN não encontrados no Worker'; return stun; }
   if(iceCache && Date.now() - iceCache.at < 30 * 60 * 1000) return iceCache.servers;
   try{
-    const r = await fetch('https://rtc.live.cloudflare.com/v1/turn/keys/' + env.TURN_KEY_ID + '/credentials/generate-ice-servers', {
+    const r = await fetch('https://rtc.live.cloudflare.com/v1/turn/keys/' + String(env.TURN_KEY_ID).trim() + '/credentials/generate-ice-servers', {
       method: 'POST',
-      headers: {'Authorization': 'Bearer ' + env.TURN_KEY_TOKEN, 'Content-Type': 'application/json'},
+      headers: {'Authorization': 'Bearer ' + String(env.TURN_KEY_TOKEN).trim(), 'Content-Type': 'application/json'},
       body: JSON.stringify({ttl: 7200})
     });
-    if(!r.ok) return stun;
+    if(!r.ok){ iceErr = 'Cloudflare recusou a chave TURN (HTTP ' + r.status + '): ' + (await r.text().catch(() => '')).slice(0, 160); return stun; }
     const j = await r.json();
     let list = Array.isArray(j.iceServers) ? j.iceServers : (j.iceServers ? [j.iceServers] : []);
     // Sem trickle ICE, as URLs na porta 53 só atrasam (recomendação da própria Cloudflare).
@@ -38,10 +39,12 @@ export async function iceServers(env){
       const urls = (Array.isArray(s.urls) ? s.urls : [s.urls]).filter(u => u && !/:53(\?|$)/.test(u));
       return Object.assign({}, s, {urls});
     }).filter(s => s.urls.length);
-    const servers = list.length ? list : stun;
+    if(!list.length){ iceErr = 'Cloudflare respondeu sem servidores: ' + JSON.stringify(j).slice(0, 160); return stun; }
+    iceErr = '';
+    const servers = list;
     iceCache = {at: Date.now(), servers};
     return servers;
-  }catch(e){ return stun; }
+  }catch(e){ iceErr = 'erro ao falar com a Cloudflare: ' + String(e && e.message || e).slice(0, 120); return stun; }
 }
 
 function send(ws, obj){ try{ ws.send(JSON.stringify(obj)); }catch(e){} }
@@ -53,7 +56,17 @@ export class CarHub {
   }
 
   cars(except){ return this.ctx.getWebSockets('car').filter(w => w !== except); }
-  car(){ return this.cars()[0] || null; }
+  // O carro mais recente e ABERTO: depois de trocar de rede, a conexão antiga pode demorar a sumir da lista.
+  car(){
+    let best = null, bestAt = -1;
+    for(const w of this.cars()){
+      if(w.readyState !== 1) continue;
+      const a = w.deserializeAttachment() || {};
+      if(a.replaced) continue;
+      if((a.at || 0) > bestAt){ best = w; bestAt = a.at || 0; }
+    }
+    return best;
+  }
   viewers(except){ return this.ctx.getWebSockets('viewer').filter(w => w !== except); }
 
   async fetch(request){
@@ -69,14 +82,15 @@ export class CarHub {
       // Só uma conexão de carro por vez: a nova substitui a antiga (ex.: reconexão após queda de rede).
       for(const old of this.cars()){ try{ old.serializeAttachment({replaced: true}); old.close(4000, 'replaced'); }catch(e){} }
       this.ctx.acceptWebSocket(server, ['car']);
-      server.serializeAttachment({role: 'car'});
+      server.serializeAttachment({role: 'car', at: Date.now()});
       for(const v of this.viewers()) send(v, {t: 'online'});
     } else if(role === 'viewer'){
       if(this.viewers().length >= MAX_VIEWERS) return new Response('muitos celulares assistindo', {status: 429});
       const vid = (request.headers.get('X-Viewer') || 'anon').slice(0, 120);
       this.ctx.acceptWebSocket(server, ['viewer', 'v:' + vid]);
       server.serializeAttachment({role: 'viewer', vid});
-      send(server, {t: 'hello', online: !!this.car(), ice: await iceServers(this.env)});
+      const ice = await iceServers(this.env);
+      send(server, {t: 'hello', online: !!this.car(), ice, iceErr});
     } else {
       return new Response('role', {status: 400});
     }
