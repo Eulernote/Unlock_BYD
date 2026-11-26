@@ -255,7 +255,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-4';
+const V = 'ubyd-c-5';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -389,7 +389,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
       '<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>'+
       '<div class="chips" id="cams-'+i+'"></div>'+
-      '<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Automática</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">Auto</option><option>H264</option><option>VP8</option></select></div>'+
+      '<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Padrão (720x576)</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">H264 (padrão)</option><option>VP8</option></select></div>'+
       '<button class="btn btn-p" id="pb-'+i+'" onclick="toggleLive('+i+')">▶ Ver ao vivo</button>')
      :'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>')+
     '<button class="link" style="color:var(--fa);font-size:12.5px" onclick="unlink('+i+')">Desvincular este carro</button></div>';
