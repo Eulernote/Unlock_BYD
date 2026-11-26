@@ -255,7 +255,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-5';
+const V = 'ubyd-c-6';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -357,7 +357,7 @@ select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-ra
 </div>
 </div>
 <script>
-var T=null,U=null,CARS=[];try{T=localStorage.getItem('ubyd_c_token');U=localStorage.getItem('ubyd_c_user');}catch(e){}
+var T=null,U=null,CARS=[];var DIAG=/[?&]diag=1/.test(location.search);try{T=localStorage.getItem('ubyd_c_token');U=localStorage.getItem('ubyd_c_user');}catch(e){}
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function show(v){['login','pair','home'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home')loadMe();}
@@ -387,9 +387,9 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
     '<div style="margin-top:10px">'+st+'</div>'+
     (can?('<div class="live"><video id="vid-'+i+'" playsinline muted autoplay onclick="fullV(this)"></video><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
-      '<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>'+
+      (DIAG?'<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>':'')+
       '<div class="chips" id="cams-'+i+'"></div>'+
-      '<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Padrão (720x576)</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">H264 (padrão)</option><option>VP8</option></select></div>'+
+      (DIAG?'<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Padrão (720x576)</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">H264 (padrão)</option><option>VP8</option></select></div>':'')+
       '<button class="btn btn-p" id="pb-'+i+'" onclick="toggleLive('+i+')">▶ Ver ao vivo</button>')
      :'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>')+
     '<button class="link" style="color:var(--fa);font-size:12.5px" onclick="unlink('+i+')">Desvincular este carro</button></div>';
@@ -412,8 +412,9 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
   else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
   else if(m.t==='offer'){onOffer(L,m.sdp);}
-  else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent='Câmera: '+(m.cam||'?')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'');
-   var cs=m.cams||[];L.cams=cs;$('cams-'+i).innerHTML=cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+')">'+camName(k)+'</button>';}).join('');
+  else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
+   var cs=(m.cams||[]).filter(function(k){return DIAG||k.indexOf('id:')!==0;});L.cams=cs;
+   $('cams-'+i).innerHTML=cs.length<2&&!DIAG?'':cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+')">'+camName(k)+'</button>';}).join('');
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
   else if(m.t==='stats'){L.car=m;}
   else if(m.t==='error'){ov(i,'O carro avisou: '+(m.msg||'erro'));}
@@ -430,7 +431,7 @@ function onOffer(L,sdp){dropPc(L);var pc=new RTCPeerConnection({iceServers:L.ice
  pc.setRemoteDescription({type:'offer',sdp:sdp}).then(function(){return pc.createAnswer();}).then(function(a){return pc.setLocalDescription(a);})
   .then(function(){return gathered(pc,2500);}).then(function(){if(L.done||L.pc!==pc)return;L.ws.send(JSON.stringify({t:'answer',sdp:pc.localDescription.sdp}));ov(L.i,'Conectando o vídeo…');})
   .catch(function(e){ov(L.i,'Erro ao abrir o vídeo: '+(e&&e.message||e));});}
-var CAMN={rvs:'Ré',rear:'Traseira',front:'Frontal',pano_h:'360° (alta)',pano_l:'360° (baixa)',byd_apa:'360° APA',apa:'APA',rf:'Direita',dms:'Motorista',face:'Rosto'};
+var CAMN={rvs:'Câmera de ré',rear:'Traseira',front:'Frontal',pano_h:'360° (alta)',pano_l:'360° (baixa)',byd_apa:'360° APA',apa:'APA',rf:'Direita',dms:'Motorista',face:'Rosto'};
 function camName(k){return CAMN[k]||(k.indexOf('id:')===0?('Câmera '+k.slice(3)):k);}
 function pickCam(i,j){var L=LIVE;if(!L||L.i!==i)return;if(j!=null&&L.cams)L.want=L.cams[j];var sz=($('sz-'+i)||{}).value||'auto';
  try{L.ws.send(JSON.stringify({t:'cam',cam:L.want||L.cam||'auto',size:sz}));}catch(e){}ov(i,'Trocando de câmera…');setTimeout(function(){if(LIVE===L&&L.pc&&L.pc.connectionState==='connected')ov(i,'');},2500);}
