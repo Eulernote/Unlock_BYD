@@ -171,6 +171,17 @@ object AdbShell {
 
     /** Controles do carro (v73): roda CarCtl como shell e devolve a linha de resultado. */
     fun carCtl(ctx: Context, args: String): Result {
+        val cmd = args.trim().substringBefore(' ')
+        if (cmd !in CarCtl.SHELL_CMDS) {
+            // Ar/janelas: no próprio app. Se faltar permissão, concede pelo ADB e tenta de novo.
+            var out = CarCtl.local(ctx, args)
+            if (out.contains("aparelho não abriu") || out.contains("Security")) {
+                run(ctx, CarCtl.PERMS.joinToString("; ") { "pm grant ${ctx.packageName} android.permission.$it 2>/dev/null" } + "; echo ok", 15000)
+                out = CarCtl.local(ctx, args)
+            }
+            val bad = out.startsWith("ERRO") || out.contains("aparelho não abriu") || out.contains("não existe") || out.contains("Exception")
+            return Result(!bad, out)
+        }
         val apk = ctx.applicationInfo.sourceDir
         val r = run(ctx, "CLASSPATH=$apk app_process /system/bin com.euler.catalog.CarCtl $args 2>&1 | tail -15", 25000)
         val line = r.output.lines().firstOrNull { it.startsWith("UBYD_RES ") }?.removePrefix("UBYD_RES ")

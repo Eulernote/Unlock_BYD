@@ -67,7 +67,7 @@ class MonitorService : Service() {
         Thread {
             try {
                 val pkg = packageName
-                AdbShell.run(applicationContext, listOf("BYDAUTO_STATISTIC_GET", "BYDAUTO_BODYWORK_GET", "BYDAUTO_BMS_GET", "BYDAUTO_POWER_GET", "BYDAUTO_ENERGY_GET")
+                AdbShell.run(applicationContext, CarCtl.PERMS
                     .joinToString("; ") { "pm grant $pkg android.permission.$it 2>/dev/null" } + "; echo ok", 15000)
             } catch (_: Exception) {}
         }.start()

@@ -15,6 +15,19 @@ import android.os.Looper
  * no byte 22: 7 = trancar, 5 = destrancar, 22 = piscar, 10 = achar o carro (pisca + buzina)).
  */
 object CarCtl {
+    /** Permissões da BYD que o app precisa (concedidas pelo ADB). O ar e as janelas rodam DENTRO do app, como no Sentry. */
+    val PERMS = listOf("BYDAUTO_STATISTIC_GET", "BYDAUTO_BODYWORK_GET", "BYDAUTO_BMS_GET", "BYDAUTO_POWER_GET", "BYDAUTO_ENERGY_GET",
+        "BYDAUTO_AC_GET", "BYDAUTO_AC_SET", "BYDAUTO_AC_COMMON", "BYDAUTO_BODYWORK_SET", "BYDAUTO_BODYWORK_COMMON",
+        "BYDAUTO_DOORLOCK_GET", "BYDAUTO_DOOR_LOCK_GET", "BYDAUTO_LIGHT_GET", "BYDAUTO_LIGHT_SET")
+    /** Comandos que precisam do shell (quadro bruto no BYDAutoManager). O resto roda no app. */
+    val SHELL_CMDS = setOf("lock", "unlock", "flash", "find", "buf")
+
+    /** Executa no próprio processo do app (ar, temperatura, ventilação, janelas, estado, métodos). */
+    fun local(ctx: Context, args: String): String {
+        val p = args.trim().split(Regex("\\s+"))
+        return try { exec(ctx, p.firstOrNull() ?: "help", p.drop(1)) } catch (t: Throwable) { val c = t.cause ?: t; "ERRO ${c.javaClass.simpleName}: ${c.message}" }
+    }
+
     private val FRAME = byteArrayOf(28, 2, 20, 0, -2, 20, 46, -126, 92, -15, 120, 80, 68, -94, -71, -54, 21, -93, -18, -68, -44, 123, 22, 0, 0, 0)
     private val DEV = mapOf(
         "ac" to "android.hardware.bydauto.ac.BYDAutoAcDevice",
@@ -44,14 +57,16 @@ object CarCtl {
         return at.getMethod("getSystemContext").invoke(main) as Context
     }
 
+    private var lastDevErr = ""
     private fun dev(ctx: Context, key: String): Any? {
         val cls = DEV[key] ?: key
-        return try { Class.forName(cls).getMethod("getInstance", Context::class.java).invoke(null, ctx) } catch (_: Throwable) { null }
+        return try { Class.forName(cls).getMethod("getInstance", Context::class.java).invoke(null, ctx).also { if (it == null) lastDevErr = "getInstance devolveu null" } }
+        catch (t: Throwable) { val c = t.cause ?: t; lastDevErr = "${c.javaClass.simpleName}: ${c.message}"; null }
     }
 
     /** Chama o método <name> com N inteiros. Mostra o retorno (0 costuma ser sucesso). */
     private fun call(obj: Any?, name: String, vararg a: Int): String {
-        if (obj == null) return "$name: aparelho não existe"
+        if (obj == null) return "$name: aparelho não abriu ($lastDevErr)"
         val m = obj.javaClass.methods.firstOrNull { it.name == name && it.parameterTypes.size == a.size && it.parameterTypes.all { p -> p == Int::class.javaPrimitiveType } }
             ?: return "$name(${a.size} args): método não existe"
         return try { "$name(${a.joinToString(",")})=" + m.invoke(obj, *a.map { it as Any }.toTypedArray()) }
