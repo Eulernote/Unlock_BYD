@@ -37,6 +37,8 @@ object CarCtl {
         "lock2" to "android.hardware.bydauto.doorlock.BYDAutoDoorlockDevice",
         "power" to "android.hardware.bydauto.power.BYDAutoPowerDevice",
         "light" to "android.hardware.bydauto.light.BYDAutoLightDevice",
+        "special" to "android.hardware.bydauto.special.BYDAutoSpecialDevice",
+        "stat" to "android.hardware.bydauto.statistic.BYDAutoStatisticDevice",
     )
 
     @JvmStatic
@@ -84,6 +86,52 @@ object CarCtl {
         } catch (t: Throwable) { val c = t.cause ?: t; "setBuffer: ${c.javaClass.simpleName} ${c.message}" }
     }
 
+    /** Modo sentinela NATIVO da BYD (como o Sentry): mantém o carro "acordado" estacionado. */
+    private fun sentry(ctx: Context, on: Boolean): String {
+        val names = listOf("SPECIAL_LOCAL_CTL_ENTER_SENTRY_MODE_SET", "SPECIAL_SENTRY_MODE_SET", "SPECIAL_SENTRY_MODE_WAKEUP_INTELLIGENT_DRIVING_CONTROLER_SET",
+            "SPECIAL_SENTRY_MODE_WORK_STATE_SET", "SPECIAL_SENTRY_MODE_VIDEO_STREAM_SOURCE_SET", "SPECIAL_SENTRY_MODE_NEED_409_SET")
+        val fids = LinkedHashMap<String, Int>()
+        for (cn in listOf("android.hardware.bydauto.BYDAutoFeatureIds\$Special", "android.hardware.bydauto.BYDAutoFeatureIds")) {
+            val c = try { Class.forName(cn) } catch (_: Throwable) { null } ?: continue
+            for (n in names) try { fids[n.removePrefix("SPECIAL_")] = c.getField(n).getInt(null) } catch (_: Throwable) {}
+            if (fids.isNotEmpty()) break
+        }
+        if (fids.isEmpty()) return "códigos do sentinela não existem neste carro"
+        val dev = dev(ctx, "special") ?: return "aparelho Special não abriu ($lastDevErr)"
+        val evc = try { Class.forName("android.hardware.bydauto.BYDAutoEventValue") } catch (t: Throwable) { return "sem BYDAutoEventValue" }
+        val set = try { dev.javaClass.getMethod("set", IntArray::class.java, evc) } catch (t: Throwable) { return "sem set(int[], valor)" }
+        val out = StringBuilder()
+        for ((n, fid) in fids) {
+            var res = "?"
+            for (vt in 1..5) {
+                res = try {
+                    val ev = evc.newInstance()
+                    try { evc.getField("intValue").setInt(ev, if (on) 1 else 0) } catch (_: Throwable) {}
+                    try { evc.getField("valueType").setInt(ev, vt) } catch (_: Throwable) {}
+                    "t$vt=" + set.invoke(dev, intArrayOf(fid), ev)
+                } catch (t: Throwable) { val c = t.cause ?: t; "t$vt:${c.javaClass.simpleName}" }
+                if (res.endsWith("=0")) break
+            }
+            out.append(n.lowercase()).append(' ').append(res).append("; ")
+        }
+        return out.toString()
+    }
+
+    /** Diagnóstico: métodos de bateria/tensão (com valores) e as operações do serviço de ACC. */
+    private fun diag(ctx: Context): String {
+        val out = StringBuilder()
+        for (k in listOf("body", "stat", "power")) {
+            val o = dev(ctx, k); if (o == null) { out.append("$k: não abriu ($lastDevErr)\n"); continue }
+            val ms = o.javaClass.methods.filter { it.parameterTypes.isEmpty() && it.name.startsWith("get") && Regex("(?i)volt|batter|power|elec|soc|acc").containsMatchIn(it.name) }
+            out.append("$k: ").append(ms.sortedBy { it.name }.joinToString(" ") { m -> m.name.removePrefix("get") + "=" + (try { m.invoke(o) } catch (t: Throwable) { "x" }) }).append("\n")
+        }
+        try {
+            val st = Class.forName("android.os.IAccModeManager\$Stub")
+            out.append("ACC: ").append(st.declaredFields.filter { it.name.startsWith("TRANSACTION_") }.joinToString(" ") { f -> f.isAccessible = true; f.name.removePrefix("TRANSACTION_") + "=" + f.getInt(null) }).append("\n")
+        } catch (t: Throwable) { out.append("ACC Stub: ${t.javaClass.simpleName}\n") }
+        return out.toString().trim()
+    }
+
     private fun exec(ctx: Context, cmd: String, a: List<String>): String {
         val ints = a.mapNotNull { it.toIntOrNull() }
         return when (cmd) {
@@ -113,6 +161,8 @@ object CarCtl {
                 val o = dev(ctx, a.getOrNull(0) ?: "ac") ?: return "aparelho não existe"
                 o.javaClass.methods.map { it.name + "(" + it.parameterTypes.size + ")" }.filter { it.startsWith("set") || it.startsWith("get") || it == "start(1)" || it == "stop(1)" }.distinct().sorted().joinToString(" ")
             }
+            "sentry" -> sentry(ctx, (ints.firstOrNull() ?: 1) != 0)
+            "diag" -> diag(ctx)
             "call" -> call(dev(ctx, a.getOrNull(0) ?: ""), a.getOrNull(1) ?: "", *a.drop(2).mapNotNull { it.toIntOrNull() }.toIntArray())
             "buf" -> buf(ctx, ints.firstOrNull() ?: 22)
             else -> "comandos: lock unlock flash find ac_on ac_off temp N fan N win C [área] state methods <ac|body|window|lock|power> call <aparelho> <método> ints... buf N"
