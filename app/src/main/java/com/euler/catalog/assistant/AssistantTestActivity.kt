@@ -35,6 +35,7 @@ class AssistantTestActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashLog.install(applicationContext) // grava crashes pra aparecerem na tela
         exec = AssistantExecutor(this)
         speaker = Speaker(this)
         AppCatalog.init() // carrega o catálogo real da loja (nomes + pacotes) em segundo plano
@@ -60,6 +61,7 @@ class AssistantTestActivity : Activity() {
         val btnTexto = Button(this).apply {
             text = "Executar (texto)"
             setOnClickListener {
+                CrashLog.clear(this@AssistantTestActivity)
                 val frase = entrada.text.toString().trim()
                 if (frase.isEmpty()) { saida.text = "Escreva um comando primeiro."; return@setOnClickListener }
                 dispatch(frase)
@@ -73,12 +75,12 @@ class AssistantTestActivity : Activity() {
         val btnFalar = Button(this).apply {
             text = "Falar agora"
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { ensureMic { comModelos { voiceEngine().captureOnce() } } }
+            setOnClickListener { safe { ensureMic { comModelos { voiceEngine().captureOnce() } } } }
         }
         val btnAmbiente = Button(this).apply {
             text = "Ativar voz (Hey Up)"
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
+            setOnClickListener { safe {
                 if (ambient) {
                     engine?.stop(); ambient = false; text = "Ativar voz (Hey Up)"
                     setStatus("Voz ambiente desligada.")
@@ -88,14 +90,17 @@ class AssistantTestActivity : Activity() {
                         setStatus("Ouvindo… diga \"Hey Up\" e o comando.")
                     } }
                 }
-            }
+            } }
         }
         linhaVoz.addView(btnFalar); linhaVoz.addView(btnAmbiente)
 
         saida = TextView(this).apply {
             setTextColor(Color.parseColor("#CFCFCF")); textSize = 14f
             setPadding(0, pad, 0, 0)
-            text = "Digite um comando e toque em Executar, ou use a voz.\n" +
+            val crash = CrashLog.readLast(this@AssistantTestActivity)
+            text = if (crash != null)
+                "⚠ ULTIMO ERRO (toque 'Executar texto' pra limpar):\n\n$crash"
+            else "Digite um comando e toque em Executar, ou use a voz.\n" +
                 "A 1ª vez que usar a voz, o app baixa os modelos do R2."
         }
         val scroll = ScrollView(this).apply {
@@ -139,6 +144,14 @@ class AssistantTestActivity : Activity() {
 
     private fun setStatus(s: String) { saida.text = s }
 
+    /** Executa um bloco capturando qualquer erro (pra não fechar o app e registrar). */
+    private fun safe(block: () -> Unit) {
+        try { block() } catch (e: Throwable) {
+            CrashLog.write(applicationContext, "UI", e)
+            setStatus("Erro: ${e.message}\n(${e.javaClass.simpleName})")
+        }
+    }
+
     // --- permissão de microfone ---
     private var pendingAfterMic: (() -> Unit)? = null
     private fun ensureMic(then: () -> Unit) {
@@ -164,8 +177,13 @@ class AssistantTestActivity : Activity() {
         if (VoiceModels.isReady(this)) { then(); return }
         setStatus("Baixando modelos de voz do R2 (só na 1ª vez)…")
         Thread {
-            val ok = VoiceModels.download(this) { msg -> runOnUiThread { setStatus(msg) } }
-            runOnUiThread { if (ok) then() else setStatus("Nao consegui baixar os modelos de voz.") }
+            try {
+                val ok = VoiceModels.download(this) { msg -> runOnUiThread { setStatus(msg) } }
+                runOnUiThread { if (ok) safe { then() } else setStatus("Nao consegui baixar os modelos de voz.") }
+            } catch (e: Throwable) {
+                CrashLog.write(applicationContext, "download", e)
+                runOnUiThread { setStatus("Erro ao baixar: ${e.message}") }
+            }
         }.start()
     }
 
