@@ -112,29 +112,6 @@ class VoiceEngine(
     private fun initModels() {
         val feat = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80)
 
-        // Palavra de ativação ("Hey Up") — modelo KWS zipformer stream.
-        kws = KeywordSpotter(
-            assetManager = null,
-            config = KeywordSpotterConfig(
-                featConfig = feat,
-                modelConfig = OnlineModelConfig(
-                    transducer = OnlineTransducerModelConfig(
-                        encoder = VoiceModels.path(ctx, "kws/encoder.onnx"),
-                        decoder = VoiceModels.path(ctx, "kws/decoder.onnx"),
-                        joiner = VoiceModels.path(ctx, "kws/joiner.onnx")
-                    ),
-                    tokens = VoiceModels.path(ctx, "kws/tokens.txt"),
-                    numThreads = 1,
-                    provider = "cpu",
-                    modelType = "zipformer2"
-                ),
-                keywordsFile = VoiceModels.path(ctx, "kws/keywords.txt"),
-                keywordsScore = 1.5f,
-                keywordsThreshold = 0.25f,
-                numTrailingBlanks = 1
-            )
-        )
-
         // Detecção de fala (quando a pessoa começa/para de falar).
         vad = Vad(
             assetManager = null,
@@ -171,6 +148,34 @@ class VoiceEngine(
                 )
             )
         )
+
+        // Palavra de ativação ("Hey Up") — opcional: se falhar, o push-to-talk ("Falar agora")
+        // continua funcionando (só VAD + ASR). Só o modo ambiente depende dela.
+        kws = try {
+            KeywordSpotter(
+                assetManager = null,
+                config = KeywordSpotterConfig(
+                    featConfig = feat,
+                    modelConfig = OnlineModelConfig(
+                        transducer = OnlineTransducerModelConfig(
+                            encoder = VoiceModels.path(ctx, "kws/encoder.onnx"),
+                            decoder = VoiceModels.path(ctx, "kws/decoder.onnx"),
+                            joiner = VoiceModels.path(ctx, "kws/joiner.onnx")
+                        ),
+                        tokens = VoiceModels.path(ctx, "kws/tokens.txt"),
+                        numThreads = 1,
+                        provider = "cpu",
+                        modelType = "zipformer2"
+                    ),
+                    keywordsFile = VoiceModels.path(ctx, "kws/keywords.txt"),
+                    keywordsScore = 1.5f,
+                    keywordsThreshold = 0.2f,
+                    numTrailingBlanks = 1
+                )
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "KWS indisponivel: ${e.message}"); null
+        }
     }
 
     private fun newAudioRecord(): AudioRecord {
@@ -189,7 +194,12 @@ class VoiceEngine(
             onError("Sem acesso ao microfone: ${e.message}"); return
         }
         val buf = ShortArray(1600) // 100ms
-        val k = kws ?: return
+        val k = kws
+        if (k == null) {
+            onError("Palavra de ativacao indisponivel. Use \"Falar agora\".")
+            try { rec.release() } catch (_: Throwable) {}
+            return
+        }
         val kStream = k.createStream("")
         try {
             rec.startRecording()
