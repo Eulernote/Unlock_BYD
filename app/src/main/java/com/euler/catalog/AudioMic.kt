@@ -105,9 +105,10 @@ object AudioMic {
         } catch (_: Throwable) {}
         try {
             val apk = ctx.applicationInfo.sourceDir
-            AdbShell.run(ctx, "pkill -f com.euler.catalog.MicShell 2>/dev/null; CLASSPATH=$apk app_process /system/bin com.euler.catalog.MicShell diag >/dev/null 2>&1; echo ok", 20000)
-            val r = AdbShell.run(ctx, "grep RESULTADO /data/local/tmp/ubyd_mic.log 2>/dev/null | tail -1", 8000).output.trim()
-            if (r.isNotBlank()) sb.append(" · Shell: ").append(r.removePrefix("RESULTADO: "))
+            AdbShell.run(ctx, "rm -f /data/local/tmp/ubyd_mic.log; pkill -f com.euler.catalog.MicShell 2>/dev/null; (CLASSPATH=$apk setsid nohup app_process /system/bin com.euler.catalog.MicShell diag >/dev/null 2>&1 &); echo ok", 12000)
+            Thread.sleep(6000)
+            val r = AdbShell.run(ctx, "cat /data/local/tmp/ubyd_mic.log 2>/dev/null", 8000).output.trim()
+            sb.append(" · Shell: ").append(if (r.isBlank()) "(sem log — não rodou)" else r.lines().joinToString(" | ").take(220))
         } catch (_: Throwable) {}
         return sb.toString()
     }
