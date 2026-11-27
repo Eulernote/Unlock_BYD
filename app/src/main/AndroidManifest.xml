@@ -7,6 +7,7 @@
     <!-- Telemetria da bateria (tração e 12V) pela API da BYD -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.DEVICE_ACC" />
     <uses-permission android:name="android.permission.DEVICE_POWER" />
@@ -59,7 +60,7 @@
             android:name=".MonitorService"
             android:exported="true"
             android:permission="android.permission.DUMP"
-            android:foregroundServiceType="specialUse">
+            android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Monitoramento remoto das câmeras do veículo, a pedido do proprietário" />

@@ -59,5 +59,3 @@
 # Controles do carro: roda via app_process pelo nome da classe. NAO ofuscar.
 -keep class com.euler.catalog.CarCtl { *; }
 
-# Microfone no shell: rodado por app_process pelo nome da classe.
--keep class com.euler.catalog.MicShell { *; }

@@ -217,7 +217,6 @@ object LiveCam {
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(ctx).createInitializationOptions())
         val e = EglBase.create(); egl = e
         appCtx = ctx
-        LiveCamCtx.ctx = ctx
         // O áudio do carro vai pelo canal de dados (AudioMic), não pela captura do WebRTC (recusada neste BYD).
         factory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(e.eglBaseContext, true, false))
