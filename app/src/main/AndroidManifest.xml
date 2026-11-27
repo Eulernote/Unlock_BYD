@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Assistente: achar apps nativos do BYD (rádio, configurações) pelo nome visível. -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <!-- Teste de câmeras (v59): ler as câmeras do veículo (360°/AVM). -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Telemetria da bateria (tração e 12V) pela API da BYD -->

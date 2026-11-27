@@ -31,6 +31,7 @@ data class Action(
     val remoteCode: Int? = null,       // código da chave remota
     val query: String? = null,         // busca de mídia
     val destination: String? = null,   // destino do Waze
+    val appLabel: String? = null,      // nativo do BYD a resolver pelo nome visível (rádio, configurações)
     val note: String? = null           // observação técnica (ex.: sequência power-on)
 )
 
@@ -190,10 +191,16 @@ object CommandParser {
         }
 
         // 9. Abrir app
-        if (Regex("\\b(abre|abrir|abra|inicia|chama)\\b").containsMatchIn(t)) {
+        if (Regex("\\b(abre|abrir|abra|inicia|chama|liga|poe)\\b").containsMatchIn(t)) {
+            // apps da loja (pacote real do catálogo)
             acharApp(t)?.let { (nome, pkg) ->
                 return Action(ActionType.OPEN_APP, "Abrindo o $nome.", pkg = pkg)
             }
+            // nativos do BYD, resolvidos pelo nome visível no carro (pacote varia por modelo)
+            if (Regex("\\bradio\\b").containsMatchIn(t))
+                return Action(ActionType.OPEN_APP, "Abrindo o radio.", appLabel = "radio")
+            if (Regex("\\bconfigurac|\\bajuste").containsMatchIn(t))
+                return Action(ActionType.OPEN_APP, "Abrindo as configuracoes.", appLabel = "configurac")
         }
 
         return Action(ActionType.UNKNOWN, "Nao entendi. Pode repetir?")

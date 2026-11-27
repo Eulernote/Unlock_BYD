@@ -21,7 +21,14 @@ class AssistantExecutor(private val ctx: Context) {
     fun execute(a: Action): String {
         try {
             when (a.type) {
-                ActionType.OPEN_APP -> a.pkg?.let { openApp(it) }
+                ActionType.OPEN_APP -> {
+                    val p = a.pkg ?: a.appLabel?.let { AppCatalog.resolveByLabel(ctx, it) }
+                    when {
+                        p != null -> openApp(p)
+                        a.appLabel != null -> return "Nao encontrei esse app no carro."
+                        else -> {} // ação interna (ex.: câmeras) — só fala
+                    }
+                }
                 ActionType.WAZE -> a.destination?.let { openWaze(it) }
                 ActionType.MEDIA -> a.query?.let { openMedia(a.pkg, it) }
                 ActionType.AC -> runAc(a)

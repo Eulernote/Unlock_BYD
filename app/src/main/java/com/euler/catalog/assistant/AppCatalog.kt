@@ -94,6 +94,30 @@ object AppCatalog {
         return null
     }
 
+    /**
+     * Resolve um app NATIVO do BYD pelo nome visível no carro (o pacote varia por modelo).
+     * Ex.: "radio" acha o app cujo rótulo contém "radio"; "configurac" acha "Configurações".
+     * Precisa do Context (roda no executor). Prefere pacotes do sistema/BYD.
+     */
+    fun resolveByLabel(ctx: android.content.Context, termo: String): String? {
+        return try {
+            val pm = ctx.packageManager
+            val n = CommandParser.normalizar(termo)
+            var fallback: String? = null
+            for (ai in pm.getInstalledApplications(0)) {
+                val label = try { CommandParser.normalizar(pm.getApplicationLabel(ai).toString()) } catch (e: Exception) { "" }
+                if (label.isNotEmpty() && label.contains(n)) {
+                    val p = ai.packageName
+                    // prefere apps do sistema/BYD (rádio e configurações nativos)
+                    if (p.startsWith("com.byd") || p.startsWith("com.android") || p.contains("radio") || p.contains("setting"))
+                        return p
+                    if (fallback == null) fallback = p
+                }
+            }
+            fallback
+        } catch (e: Exception) { null }
+    }
+
     private fun httpGet(url: String): String? = try {
         val c = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 10000; readTimeout = 12000
