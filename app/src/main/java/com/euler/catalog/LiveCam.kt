@@ -74,6 +74,7 @@ object LiveCam {
     private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false, var dc: DataChannel? = null, var mic: Boolean = false)
 
     @Volatile private var appCtx: Context? = null
+    private val peers = HashMap<String, Peer>()
     private val timeouts = HashMap<String, Runnable>()
 
     @Volatile var lastStatus = "parado"; private set
