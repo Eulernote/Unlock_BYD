@@ -71,7 +71,7 @@ object LiveCam {
     private var defH = 0
     private var sizeMode = "auto"
 
-    private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false, var audio: RtpTransceiver? = null, var mic: Boolean = false)
+    private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false, var dc: DataChannel? = null, var mic: Boolean = false)
     // Microfone (v85): trilha de áudio criada só quando algum celular pede para ouvir.
     private var adm: org.webrtc.audio.JavaAudioDeviceModule? = null
     private var audioSrc: org.webrtc.AudioSource? = null
@@ -104,10 +104,9 @@ object LiveCam {
             selectCam(cam, size)
             stopPeer(v, closeCamIfIdle = false)
             val pc = createPeer(v, ice, codec, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
-            // Áudio já negociado (sem trilha = silêncio, microfone fechado); liga quando o celular pede ("mic").
-            val atr = try { pc.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY, listOf("cam"))) } catch (t: Throwable) { null }
-            try { pc.setAudioRecording(false) } catch (_: Throwable) {}   // microfone fechado até alguém pedir
-            peers[v] = Peer(pc, send, audio = atr)
+            // Canal de dados "mic" (negociado, id 0): o áudio do carro vai por aqui quando o celular pede "Ouvir".
+            val dc = try { pc.createDataChannel("mic", DataChannel.Init().apply { negotiated = true; id = 0; ordered = false; maxRetransmits = 0 }) } catch (t: Throwable) { null }
+            peers[v] = Peer(pc, send, dc = dc)
             pc.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(sdp: SessionDescription) {
                     exec.execute {
@@ -156,32 +155,26 @@ object LiveCam {
     fun mic(v: String, on: Boolean) = exec.execute {
         val p = peers[v] ?: return@execute
         try {
-            val tr = p.audio ?: throw IllegalStateException("esta conexão não tem áudio — feche e abra a câmera de novo")
             if (on) {
-                val c = appCtx
-                if (c != null && c.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    Thread { try { AdbShell.run(c, "pm grant ${c.packageName} android.permission.RECORD_AUDIO; echo ok", 15000) } catch (_: Throwable) {} }.start()
-                    throw IllegalStateException("o app não tinha permissão de microfone — concedi agora, toque em Ouvir de novo")
+                val c = appCtx ?: throw IllegalStateException("sem contexto")
+                val dc = p.dc ?: throw IllegalStateException("esta conexão não tem canal de áudio — feche e abra a câmera de novo")
+                if (dc.state() != DataChannel.State.OPEN) throw IllegalStateException("o canal de áudio ainda não abriu — tente de novo em 1 segundo")
+                val r = AudioMic.start(c, dc)
+                if (r.startsWith("ok")) {
+                    p.mic = true
+                    p.send(JSONObject().put("t", "mic").put("v", v).put("on", true).put("ok", true))
+                } else {
+                    p.mic = false
+                    p.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", r))
                 }
-                micErr = ""
-                val t = ensureAudioTrack()
-                tr.sender.setTrack(t, false); t.setEnabled(true); p.mic = true
-                adm?.setMicrophoneMute(false)
-                try { p.pc.setAudioRecording(true) } catch (_: Throwable) {}
-                // Confere em 2 s se o microfone realmente começou a gravar; se não, testa a próxima combinação.
-                main.postDelayed({ exec.execute {
-                    if (peers[v]?.mic == true && (!micRec || micErr.isNotEmpty())) micFailed(v, if (micErr.isNotEmpty()) micErr else "o microfone não começou a gravar")
-                    else if (peers[v]?.mic == true) { micAttempts = 0; appCtx?.let { saveAudioIdx(it) } } // funcionou: guarda a combinação boa
-                } }, 2500)
             } else {
-                tr.sender.setTrack(null, false); p.mic = false
-                if (peers.values.none { it.mic }) for (q in peers.values) try { q.pc.setAudioRecording(false) } catch (_: Throwable) {}
+                p.mic = false
+                if (peers.values.none { it.mic }) AudioMic.stop()
+                p.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", true))
             }
-            if (peers.values.none { it.mic }) releaseAudio()
-            p.send(JSONObject().put("t", "mic").put("v", v).put("on", p.mic).put("ok", true))
         } catch (t: Throwable) {
             Log.e(TAG, "mic", t)
-            micFailed(v, msgOf(t))
+            p.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", msgOf(t)))
         }
     }
 
@@ -406,7 +399,7 @@ object LiveCam {
     private fun stopPeer(v: String, closeCamIfIdle: Boolean = true) {
         timeouts.remove(v)?.let { main.removeCallbacks(it) }
         peers.remove(v)?.let { try { it.pc.dispose() } catch (_: Throwable) {} }
-        if (peers.values.none { it.mic }) try { releaseAudio() } catch (_: Throwable) {}
+        if (peers.values.none { it.mic }) try { AudioMic.stop() } catch (_: Throwable) {}
         if (closeCamIfIdle && peers.isEmpty()) closeCamera()
         lastStatus = if (peers.isEmpty()) "parado" else "transmitindo p/ ${peers.size}"
     }
