@@ -71,8 +71,9 @@ dependencies {
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     // Cliente ADB: shell no próprio carro via 127.0.0.1:5555 (Device Owner sem notebook, cluster).
     implementation("dev.mobile:dadb:1.2.10")
-    // Voz offline do assistente (reconhecimento, palavra de ativação, VAD) — modelos baixados do R2.
-    implementation("com.k2fsa.sherpa.onnx:sherpa-onnx-android:1.+")
+    // Voz offline (sherpa-onnx): classes Kotlin em com/k2fsa/sherpa/onnx e libs nativas
+    // em jniLibs/arm64-v8a embarcadas do release v1.12.14 (nao ha artefato no Maven Central).
+    // Modelos de voz sao baixados do R2 em tempo de execucao.
     // Câmeras ao vivo (v60): WebRTC pré-compilado + WebSocket pro hub de sinalização.
     implementation("io.github.webrtc-sdk:android:114.5735.10")   // WebRTC puro (Java), sem dependência de Kotlin novo
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
