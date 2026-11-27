@@ -109,6 +109,7 @@ class MonitorService : Service() {
         // As permissões de leitura da BYD podem precisar ser concedidas (best-effort, pelo ADB do carro).
         Thread {
             try { BydUnlock.apply(applicationContext) } catch (_: Throwable) {}
+            try { val g = AdbShell.startGuard(applicationContext); VLog.add(applicationContext, "guardião: " + (if (g.output.contains("UBYD_OK")) "ativo" else "falhou ${g.reason}")) } catch (_: Throwable) {}
             try {
                 val pkg = packageName
                 AdbShell.run(applicationContext, CarCtl.PERMS
@@ -150,6 +151,7 @@ class MonitorService : Service() {
         // Monitoramento desligado no painel: solta a multimídia para ela dormir normalmente.
         val app = applicationContext
         Thread { try { Vigia.release(app, "monitoramento desligado") } catch (_: Exception) {} }.start()
+        if (!enabled(app)) Thread { try { AdbShell.stopGuard(app) } catch (_: Exception) {} }.start()
         super.onDestroy()
     }
 

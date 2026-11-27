@@ -171,6 +171,32 @@ object AdbShell {
         return Result(!r.output.contains("AINDA_RODANDO"), r.output.trim(), r.reason)
     }
 
+    // ---- Guardião (v83): processo do shell que religa o monitoramento se a BYD matar o app ao desligar o carro.
+    private const val WD = "/data/local/tmp/ubyd_wd"
+    fun startGuard(ctx: Context): Result {
+        val p = ctx.packageName
+        val script = listOf(
+            "#!/system/bin/sh",
+            "P=$p; L=$WD.log",
+            "[ -f $WD.pid ] && kill \$(cat $WD.pid) 2>/dev/null",
+            "echo \$\$ > $WD.pid; rm -f $WD.stop",
+            "[ -f \$L ] && [ \$(wc -c < \$L) -gt 40000 ] && tail -n 100 \$L > \$L.t && mv \$L.t \$L",
+            "echo \"\$(date +%d/%m\\ %T) guardião iniciado\" >> \$L",
+            "dumpsys deviceidle whitelist +\$P >/dev/null 2>&1",
+            "for o in RUN_IN_BACKGROUND RUN_ANY_IN_BACKGROUND WAKE_LOCK AUTO_START BOOT_COMPLETED; do cmd appops set \$P \$o allow >/dev/null 2>&1; done",
+            "n=0",
+            "while true; do",
+            "  [ -f $WD.stop ] && { echo \"\$(date +%T) guardião parado\" >> \$L; rm -f $WD.pid; exit 0; }",
+            "  if ! pidof \$P >/dev/null 2>&1; then echo \"\$(date +%T) app encerrado pela BYD -> religando\" >> \$L; am start-foreground-service -n \$P/.MonitorService >/dev/null 2>&1 || am startservice -n \$P/.MonitorService >/dev/null 2>&1; fi",
+            "  n=\$((n+1)); [ \$((n % 30)) -eq 0 ] && { echo \"\$(date +%T) guardião ok\" >> \$L; pm path \$P >/dev/null 2>&1 || exit 0; }",
+            "  sleep 5",
+            "done").joinToString("\n")
+        val cmd = "cat > $WD.sh <<'UBYDEOF'\n$script\nUBYDEOF\nchmod 755 $WD.sh; (setsid nohup sh $WD.sh >/dev/null 2>&1 &); sleep 1; cat $WD.pid 2>/dev/null; echo UBYD_OK"
+        return run(ctx, cmd, 20000)
+    }
+    fun stopGuard(ctx: Context): Result = run(ctx, "touch $WD.stop; echo UBYD_OK", 10000)
+    fun guardLog(ctx: Context): String = run(ctx, "tail -n 25 $WD.log 2>/dev/null; [ -f $WD.pid ] && kill -0 \$(cat $WD.pid) 2>/dev/null && echo '● guardião rodando' || echo '○ guardião parado'", 10000).output
+
     /** Controles do carro (v73): roda CarCtl como shell e devolve a linha de resultado. */
     fun carCtl(ctx: Context, args: String): Result {
         val cmd = args.trim().substringBefore(' ')

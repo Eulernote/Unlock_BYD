@@ -415,8 +415,14 @@ class MainActivity : Activity() {
             "🛡 Vigia (teste): manter acordada com o carro desligado" to { showVigiaTest() },
             "🎛 Controles do carro (teste): trancar, ar, janelas" to { showCarCtlTest() },
             "📜 Registro do vigia (o que aconteceu ao desligar)" to {
-                android.app.AlertDialog.Builder(this).setTitle("Registro do vigia").setMessage(VLog.read(this))
-                    .setPositiveButton("OK", null).setNeutralButton("Limpar") { _, _ -> VLog.clear(this); toast("Registro limpo") }.show()
+                toast("Aguarde…")
+                Thread {
+                    val g = try { AdbShell.guardLog(applicationContext) } catch (e: Exception) { e.message ?: "" }
+                    runOnUiThread {
+                        android.app.AlertDialog.Builder(this).setTitle("Registro do vigia").setMessage(VLog.read(this) + "\n\n— Guardião (shell) —\n" + g)
+                            .setPositiveButton("OK", null).setNeutralButton("Limpar") { _, _ -> VLog.clear(this); toast("Registro limpo") }.show()
+                    }
+                }.start()
             },
             "ADAS: testar códigos p/ esconder (Shark)" to { showAdasTestMenu() },
             "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
