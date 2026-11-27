@@ -150,8 +150,7 @@ class VoiceEngine(
                 sampleRate = SAMPLE_RATE,
                 numThreads = 1,
                 provider = "cpu"
-            ),
-            bufferSizeInSeconds = 60.0f
+            )
         )
 
         // Reconhecimento em português (Whisper multilíngue).

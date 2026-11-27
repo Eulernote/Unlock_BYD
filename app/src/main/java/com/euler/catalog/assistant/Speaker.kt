@@ -14,19 +14,23 @@ import java.util.Locale
 class Speaker(ctx: Context) {
 
     private var ready = false
-    private val tts = TextToSpeech(ctx.applicationContext) { status ->
-        if (status == TextToSpeech.SUCCESS) {
-            try { tts.language = Locale("pt", "BR") } catch (_: Throwable) {}
-            ready = true
+    private var tts: TextToSpeech? = null
+
+    init {
+        tts = TextToSpeech(ctx.applicationContext) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                try { tts?.language = Locale("pt", "BR") } catch (_: Throwable) {}
+                ready = true
+            }
         }
     }
 
     fun speak(text: String) {
         if (!ready || text.isBlank()) return
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "heyup")
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "heyup")
     }
 
     fun shutdown() {
-        try { tts.stop(); tts.shutdown() } catch (_: Throwable) {}
+        try { tts?.stop(); tts?.shutdown() } catch (_: Throwable) {}
     }
 }
