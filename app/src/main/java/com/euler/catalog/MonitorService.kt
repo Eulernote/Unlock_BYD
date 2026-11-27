@@ -98,6 +98,9 @@ class MonitorService : Service() {
         try { ws?.close(1000, "off") } catch (_: Exception) {}
         ws = null; connected = false
         LiveCam.stopAll()
+        // Monitoramento desligado no painel: solta a multimídia para ela dormir normalmente.
+        val app = applicationContext
+        Thread { try { Vigia.release(app, "monitoramento desligado") } catch (_: Exception) {} }.start()
         super.onDestroy()
     }
 
@@ -105,7 +108,13 @@ class MonitorService : Service() {
     private val teleTick = object : Runnable {
         override fun run() {
             Thread {
-                try { val t = Telemetry.read(applicationContext); if (t.has("soc") || t.has("v12")) ws?.send(t.toString()) } catch (_: Exception) {}
+                try {
+                    val t = Telemetry.read(applicationContext)
+                    val vig = try { Vigia.tick(applicationContext, t) } catch (e: Exception) { "erro" }
+                    t.put("vig", vig)
+                    if (t.has("soc") || t.has("v12")) ws?.send(t.toString())
+                    if (vig.startsWith("cut_")) Vigia.release(applicationContext, vig) // avisou o servidor; agora solta
+                } catch (_: Exception) {}
             }.start()
             if (running) ui.postDelayed(this, 120_000)
         }
@@ -136,7 +145,8 @@ class MonitorService : Service() {
                 val v = m.optString("v", "")
                 val send: (JSONObject) -> Unit = { o -> try { webSocket.send(o.toString()) } catch (_: Exception) {} }
                 when (m.optString("t")) {
-                    "start" -> if (v.isNotEmpty()) LiveCam.start(applicationContext, v, m.optJSONArray("ice"), m.optString("cam", "auto"), m.optString("size", "auto"), m.optString("codec", "auto"), send)
+                    "start" -> if (v.isNotEmpty() && Vigia.socLow(applicationContext)) send(JSONObject().put("t", "error").put("v", v).put("code", "lowbat").put("msg", "Bateria de tração abaixo de 5%"))
+                    else if (v.isNotEmpty()) LiveCam.start(applicationContext, v, m.optJSONArray("ice"), m.optString("cam", "auto"), m.optString("size", "auto"), m.optString("codec", "auto"), send)
                     "cam" -> if (v.isNotEmpty()) LiveCam.switchCam(v, m.optString("cam", "auto"), m.optString("size", "auto"))
                     "answer" -> if (v.isNotEmpty()) LiveCam.answer(v, m.optString("sdp"))
                     "stop" -> if (v.isNotEmpty()) LiveCam.stop(v)

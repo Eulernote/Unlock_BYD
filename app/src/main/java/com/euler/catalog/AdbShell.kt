@@ -154,10 +154,10 @@ object AdbShell {
     private const val VIGIA_CLS = "com.euler.catalog.AccDaemon"
 
     /** Inicia o processo que segura a multimídia acordada por [minutes] minutos (roda como shell, fora do app). */
-    fun startVigia(ctx: Context, minutes: Int): Result {
+    fun startVigia(ctx: Context, minutes: Int, heartbeat: String = ""): Result {
         val apk = ctx.applicationInfo.sourceDir
         val cmd = "pkill -f $VIGIA_CLS 2>/dev/null; rm -f $VIGIA_LOG; " +
-            "(CLASSPATH=$apk setsid nohup app_process /system/bin $VIGIA_CLS $minutes >/dev/null 2>&1 &) ; " +
+            "(CLASSPATH=$apk setsid nohup app_process /system/bin $VIGIA_CLS $minutes $heartbeat >/dev/null 2>&1 &) ; " +
             "sleep 3; cat $VIGIA_LOG 2>/dev/null; pgrep -f $VIGIA_CLS >/dev/null && echo UBYD_RUNNING; echo UBYD_OK"
         val r = run(ctx, cmd, 20000)
         return if (r.output.contains("UBYD_RUNNING")) Result(true, r.output.replace("UBYD_RUNNING", "").replace("UBYD_OK", "").trim())
@@ -167,6 +167,12 @@ object AdbShell {
     fun stopVigia(ctx: Context): Result {
         val r = run(ctx, "pkill -f $VIGIA_CLS 2>/dev/null; sleep 1; pgrep -f $VIGIA_CLS >/dev/null && echo AINDA_RODANDO || echo parada; tail -3 $VIGIA_LOG 2>/dev/null", 15000)
         return Result(!r.output.contains("AINDA_RODANDO"), r.output.trim(), r.reason)
+    }
+
+    /** true = processo da vigia vivo; null = não deu pra perguntar (sem ADB). */
+    fun vigiaRunning(ctx: Context): Boolean? {
+        val r = run(ctx, "pgrep -f $VIGIA_CLS >/dev/null && echo UBYD_SIM || echo UBYD_NAO", 12000)
+        return when { r.output.contains("UBYD_SIM") -> true; r.output.contains("UBYD_NAO") -> false; else -> null }
     }
 
     fun vigiaStatus(ctx: Context): Result {
