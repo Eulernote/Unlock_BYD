@@ -284,7 +284,7 @@ export async function handleClient(request, env, p, H){
       // Só mostra carros em que ele continua na lista (a equipe pode ter removido) e que estão ativos.
       if(!c || (m.clients || []).indexOf(user) < 0) continue;
       let online = false, bat = null;
-      if(env.CAR_HUB && m.on){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; }catch(e){} }
+      if(env.CAR_HUB && m.on){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; if(bat && j.vig) bat.vig = j.vig.s; }catch(e){} }
       cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, seen: seen || c.seen || 0, online: online, bat: bat});
     }
     return H.json({user:user, cars:cars});
@@ -335,7 +335,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-10';
+const V = 'ubyd-c-11';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -490,7 +490,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
    var can=c.active&&c.monitor;
    return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
-    (c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b> &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b> <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
+    (c.bat?teleAlert(c.bat,c.bat.vig):'')+(c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b> &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b> <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
     (can?'<button class="link" style="padding-top:8px;text-align:left" onclick="toggleBat('+i+')">📈 Bateria e consumo</button><div id="bat-'+i+'" class="hide" style="margin-top:6px"></div>':'')+
     (can?('<div class="live" id="live-'+i+'"><video id="vid-'+i+'" playsinline muted autoplay onclick="openFull('+i+')"></video><canvas id="cv-'+i+'" onclick="openFull('+i+')"></canvas><div class="fsbar" id="fsb-'+i+'"></div><button class="fsbtn" onclick="openFull('+i+')">⛶</button><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
@@ -507,7 +507,7 @@ function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste l
 /* bateria (telemetria) */
 function nb(v,d){return v==null?'—':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});}
 function toggleBat(i){var el=$('bat-'+i),c=CARS[i];if(!el||!c)return;var open=el.classList.toggle('hide')===false;
- if(open&&!el._w)el._w=teleWidget(el,function(h){return api('/c/api/tele?car='+encodeURIComponent(c.id)+'&h='+h);});}
+ if(open&&!el._w)el._w=teleWidget(el,function(h){return api('/c/api/tele?car='+encodeURIComponent(c.id)+'&h='+h);},{noAlert:true});}
 
 /* esqueci a senha */
 var FG={u:'',rt:''};
@@ -544,7 +544,7 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
    setGrid(L,m.layout==='strip4'?m.tiles:null);
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
   else if(m.t==='stats'){L.car=m;}
-  else if(m.t==='error'){L.got=true;clearTimeout(L.wd);ov(i,'O carro avisou: '+(m.msg||'erro'));}
+  else if(m.t==='error'){L.got=true;clearTimeout(L.wd);ov(i,m.code==='lowbat'?'🛡 Câmeras indisponíveis: bateria de tração abaixo de 5%. Carregue o carro para voltar a ver as câmeras.':'O carro avisou: '+(m.msg||'erro'));if(m.code==='lowbat')stopLive();}
  };
  ws.onclose=function(ev){if(!L.done)stopLive(ev.code===1006?'Sem conexão com o servidor. Toque em Ver ao vivo para tentar de novo.':'Conexão encerrada. Toque em Ver ao vivo para tentar de novo.');};
  L.timer=setTimeout(function(){stopLive('Sessão encerrada após 5 minutos (para economizar dados). Toque para ver de novo.');},5*60*1000);

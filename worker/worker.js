@@ -789,7 +789,7 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  var log=(c.log||[]).slice().reverse();var dl=document.getElementById('d-log');
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}
  else{dl.innerHTML=log.map(function(e){var col=userColor(e.by);return '<div class="logrow"><span class="logact '+e.cls+'">'+e.acao+'</span><span class="logby">por <span style="color:'+col+';font-weight:650">'+e.by+'</span></span><span class="logwhen">'+e.when+'</span></div>';}).join('');}
- document.getElementById('detail').style.display='flex';planPreview();loadMon(c.id);var te=document.getElementById('d-tele');if(te&&window.teleWidget)teleWidget(te,function(h){return api('/api/tele?id='+encodeURIComponent(c.id)+'&h='+h);});}
+ document.getElementById('detail').style.display='flex';planPreview();loadMon(c.id);var te=document.getElementById('d-tele');if(te&&window.teleWidget)teleWidget(te,function(h){return api('/api/tele?id='+encodeURIComponent(c.id)+'&h='+h);},{admin:true});}
 var DTAB='plano',DCAR=null;
 function detailTab(t){DTAB=t;document.querySelectorAll('#d-tabs .chip').forEach(function(x){x.classList.toggle('on',x.getAttribute('data-t')===t);});
  document.querySelectorAll('#d-actions .dpane').forEach(function(x){x.style.display=x.getAttribute('data-t')===t?'block':'none';});}

@@ -65,6 +65,7 @@ export class CarHub {
     // O carro pode mandar o horário da leitura (ex.: leituras guardadas enquanto estava sem internet).
     if(typeof m.ts === 'number' && m.ts > now - 31 * 86400000 && m.ts <= now + 60000) now = Math.round(m.ts);
     this.sql().exec('INSERT OR REPLACE INTO tele(ts, soc, v12, lvl, sys) VALUES (?, ?, ?, ?, ?)', now, soc, v12, num(m.v12lvl), num(m.sys));
+    if(typeof m.vig === 'string') this.ctx.storage.put('vig', {s: m.vig.slice(0, 20), ts: now});
     if(Math.random() < 0.02) this.sql().exec('DELETE FROM tele WHERE ts < ?', now - 30 * 86400000);
   }
   lastTele(){ try{ const r = this.sql().exec('SELECT ts, soc, v12 FROM tele ORDER BY ts DESC LIMIT 1').toArray(); return r[0] || null; }catch(e){ return null; } }
@@ -85,14 +86,14 @@ export class CarHub {
 
   async fetch(request){
     const url = new URL(request.url);
-    if(url.pathname === '/status') return Response.json({online: !!this.car(), viewers: this.viewers().length, bat: this.lastTele()});
+    if(url.pathname === '/status') return Response.json({online: !!this.car(), viewers: this.viewers().length, bat: this.lastTele(), vig: (await this.ctx.storage.get('vig')) || null});
     if(url.pathname === '/tele'){
       const h = Math.min(24 * 30, Math.max(1, Number(url.searchParams.get('h')) || 24));
       let rows = [];
       try{ rows = this.sql().exec('SELECT ts, soc, v12 FROM tele WHERE ts >= ? ORDER BY ts', Date.now() - h * 3600000).toArray(); }catch(e){}
       // Muitos pontos (7 dias): fica com no máximo ~800, sem perder o começo e o fim.
       if(rows.length > 800){ const step = rows.length / 800, out = []; for(let i = 0; i < 800; i++) out.push(rows[Math.floor(i * step)]); out.push(rows[rows.length - 1]); rows = out; }
-      return Response.json({last: this.lastTele(), rows});
+      return Response.json({last: this.lastTele(), rows, vig: (await this.ctx.storage.get('vig')) || null});
     }
     if(request.headers.get('Upgrade') !== 'websocket') return new Response('esperava websocket', {status: 426});
 
