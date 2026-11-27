@@ -355,7 +355,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-17';
+const V = 'ubyd-c-18';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -641,7 +641,7 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='offer'){L.got=true;clearTimeout(L.wd);onOffer(L,m.sdp);}
   else if(m.t==='ac'){applyAc(i,m);}
   else if(m.t==='micretry'){AUTOMIC={i:i,tries:(AUTOMIC&&AUTOMIC.i===i?AUTOMIC.tries:0)+1};$('inf-'+i).textContent='🎤 Ajustando o microfone deste carro…';if(AUTOMIC.tries<=7){stopLive();setTimeout(function(){startLive(i);},1500);}else{AUTOMIC=null;micUi(i,false);}}
-  else if(m.t==='mic'){if(!m.ok){L.mic=false;AUTOMIC=null;var vv=$('vid-'+i);if(vv)vv.muted=true;micUi(i,false);$('inf-'+i).textContent='🎤 Microfone: '+(m.msg||'não funcionou neste carro');}else{AUTOMIC=null;micUi(i,m.on);$('inf-'+i).textContent='';}}
+  else if(m.t==='mic'){if(!m.ok){L.mic=false;AUTOMIC=null;audioStop(L);micUi(i,false);$('inf-'+i).textContent='🎤 Microfone: '+(m.msg||'não funcionou neste carro');}else{AUTOMIC=null;L.mic=m.on;micUi(i,m.on);$('inf-'+i).textContent='';if(!m.on)audioStop(L);}}
   else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.real&&m.real!==m.cam?(' ('+m.real+')'):'')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
    var cs=(m.cams||[]).filter(function(k){return DIAG||k.indexOf('id:')!==0;});L.cams=cs;
    var chips=cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+',true)">'+camName(k)+'</button>';}).join('');
@@ -659,6 +659,7 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
 function gathered(pc,ms){return new Promise(function(res){if(pc.iceGatheringState==='complete')return res();var t=setTimeout(res,ms);
  pc.addEventListener('icegatheringstatechange',function(){if(pc.iceGatheringState==='complete'){clearTimeout(t);res();}});});}
 function onOffer(L,sdp){dropPc(L);var pc=new RTCPeerConnection({iceServers:L.ice});L.pc=pc;var v=$('vid-'+L.i);
+ try{var dc=pc.createDataChannel('mic',{negotiated:true,id:0,ordered:false,maxRetransmits:0});dc.binaryType='arraybuffer';L.dc=dc;dc.onmessage=function(ev){playPcm(L,ev.data);};}catch(e){}
  pc.ontrack=function(e){if(!v)return;L.ms=L.ms||new MediaStream();if(L.ms.getTracks().indexOf(e.track)<0)L.ms.addTrack(e.track);if(v.srcObject!==L.ms)v.srcObject=L.ms;v.muted=!L.mic;var p=v.play();if(p&&p.catch)p.catch(function(){});};
  pc.onconnectionstatechange=function(){if(L.pc!==pc)return;var s=pc.connectionState;
   if(s==='connected')ov(L.i,'');else if(s==='failed')ov(L.i,'Não consegui receber o vídeo nesta rede. Tente de novo (ou em outra rede).');else if(s==='disconnected')ov(L.i,'Sinal instável…');};
@@ -696,12 +697,25 @@ function closeFull(){if(FS==null)return;var el=$('live-'+FS);FS=null;if(el)el.cl
  try{if(screen.orientation&&screen.orientation.unlock)screen.orientation.unlock();}catch(e){}
  try{if(document.fullscreenElement)document.exitFullscreen();}catch(e){}}
 document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement&&FS!=null)closeFull();});
-function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}L.ms=null;L.mic=false;micUi(L.i,false);var v=$('vid-'+L.i);if(v){v.srcObject=null;v.muted=true;}}
+function dropPc(L){audioStop(L);if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}L.dc=null;L.ms=null;L.mic=false;micUi(L.i,false);var v=$('vid-'+L.i);if(v){v.srcObject=null;v.muted=true;}}
+/* áudio do carro (PCM 16 kHz mono pelo canal de dados) tocado via Web Audio */
+function audioStop(L){if(L&&L.ac){try{L.ac.close();}catch(e){}L.ac=null;L.nextT=0;}}
+function playPcm(L,buf){try{
+ if(!L.mic)return;
+ if(!L.ac){var AC=window.AudioContext||window.webkitAudioContext;if(!AC)return;L.ac=new AC();L.nextT=0;}
+ var ac=L.ac;if(ac.state==='suspended')ac.resume();
+ var pcm=new Int16Array(buf);if(!pcm.length)return;var f=new Float32Array(pcm.length);for(var i=0;i<pcm.length;i++)f[i]=pcm[i]/32768;
+ var ab=ac.createBuffer(1,f.length,16000);ab.copyToChannel(f,0);
+ var src=ac.createBufferSource();src.buffer=ab;src.connect(ac.destination);
+ var now=ac.currentTime;if(!L.nextT||L.nextT<now+0.02)L.nextT=now+0.12;  // buffer de ~120 ms contra engasgos
+ src.start(L.nextT);L.nextT+=ab.duration;
+}catch(e){}}
 /* microfone do carro */
 var AUTOMIC=null;
 function micUi(i,on,busy){['mic-'+i,'micf-'+i].forEach(function(id){var b=$(id);if(!b)return;b.textContent=busy?'⏳ Ligando o microfone…':(on?'🔇 Parar de ouvir':'🎤 Ouvir o carro');b.classList.toggle('on',!!on);});}
 function toggleMic(i){var L=LIVE;if(!L||L.i!==i||!L.ws||L.ws.readyState!==1){alert('Abra a câmera ao vivo primeiro.');return;}
- var on=!L.mic;L.mic=on;var v=$('vid-'+i);if(v){v.muted=!on;var p=v.play();if(p&&p.catch)p.catch(function(){});}
+ var on=!L.mic;L.mic=on;
+ if(on){try{var AC=window.AudioContext||window.webkitAudioContext;if(AC){if(!L.ac)L.ac=new AC();if(L.ac.state==='suspended')L.ac.resume();L.nextT=0;}}catch(e){}}else audioStop(L);
  micUi(i,on,on);L.ws.send(JSON.stringify({t:'mic',on:on}));}
 function stopLive(msg){var L=LIVE;if(!L)return;closeFull();if(L.raf)cancelAnimationFrame(L.raf);var cv=$('cv-'+L.i);if(cv)cv.style.display='none';L.done=true;LIVE=null;clearTimeout(L.timer);clearTimeout(L.wd);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
  try{L.ws.send(JSON.stringify({t:'stop'}));}catch(e){}try{L.ws.close();}catch(e){}dropPc(L);
