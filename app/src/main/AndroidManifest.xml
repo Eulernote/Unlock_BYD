@@ -55,6 +55,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Tela de teste do assistente (passo intermediario): digita comando e executa no carro. -->
+        <activity
+            android:name=".assistant.AssistantTestActivity"
+            android:label="Hey Up (teste)"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- Câmeras ao vivo: conexão com o hub enquanto o monitoramento estiver liberado no painel. -->
         <service
             android:name=".MonitorService"
