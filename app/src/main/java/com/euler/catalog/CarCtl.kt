@@ -8,7 +8,7 @@ import android.os.Looper
  *
  * Roda como processo do shell (pelo ADB local, com app_process), igual ao Sentry: as APIs da BYD que
  * mudam algo no carro só aceitam chamadas de processos com mais privilégio que um app comum.
- * Uso: app_process /system/bin com.euler.catalog.CarCtl <comando> [args...]
+ * Uso: app_process /system/bin com.euler.catalog.CarCtl comando args
  * Responde uma linha "UBYD_RES ..." com o resultado.
  *
  * Fonte dos códigos: análise do Sentry (BYDAutoManager.setBuffer(1034, 0xAA000004, quadro) com o código
