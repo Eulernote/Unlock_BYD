@@ -20,7 +20,9 @@ object VoiceModels {
     /** true quando o modelo já está copiado para o armazenamento interno. */
     fun isReady(ctx: Context): Boolean {
         val d = modelDir(ctx)
-        return File(d, "am/final.mdl").exists() || File(d, "conf/model.conf").exists()
+        // os modelos pequenos do Vosk vêm com layout "plano" (final.mdl na raiz);
+        // os grandes usam subpasta am/. Aceita os dois.
+        return File(d, "final.mdl").exists() || File(d, "am/final.mdl").exists()
     }
 
     /**
