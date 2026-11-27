@@ -29,6 +29,11 @@ object Vigia {
     fun hbFile(ctx: Context) = File(ctx.applicationContext.getExternalFilesDir(null) ?: ctx.applicationContext.filesDir, "vigia_hb")
     private fun writeHb(ctx: Context, s: String) { try { hbFile(ctx).writeText(s + " " + System.currentTimeMillis()) } catch (_: Exception) {} }
 
+    /** Resultado do último wakeUpMcu (laço do MonitorService). */
+    @Volatile var wakeOk = false
+    @Volatile var wakeLast = ""
+    fun armed(ctx: Context) = (prefs(ctx).getString("cut", "") ?: "").isEmpty()
+
     /** Tração abaixo do mínimo na última leitura → câmeras bloqueadas. */
     fun socLow(ctx: Context): Boolean { val s = prefs(ctx).getFloat("soc", -1f); return s >= 0f && s < SOC_MIN }
 
@@ -68,7 +73,9 @@ object Vigia {
         if (cut.isNotEmpty()) { writeHb(ctx, "stop $cut"); return "cut_$cut" }
 
         writeHb(ctx, "ok")
-        // Garante que o processo da vigia está vivo (a cada ~10 min; religa se morreu).
+        // v81: mantém acordada pelo método do Electro (wakeUpMcu em laço, no MonitorService). A trava de ACC
+        // pelo ADB exige DEVICE_ACC, que o shell não tem nos carros novos — fica só como tentativa extra.
+        if (wakeOk) return "on"
         var st = p.getString("st", "?") ?: "?"
         if (now - p.getLong("chk", 0L) >= CHECK_EVERY_MS) {
             p.edit().putLong("chk", now).apply()

@@ -38,6 +38,8 @@ object Telemetry {
         }
         num(body, "getBatteryVoltageLevel")?.let { o.put("v12lvl", it.toInt()) }
         num(body, "getAutoSystemState")?.let { o.put("sys", it.toInt()) }
+        // Este modelo não informa a tensão da 12V; só um aviso de "12V baixa" (registrado para análise).
+        num(device(ctx, "android.hardware.bydauto.power.BYDAutoPowerDevice"), "getBatteryLowVoltageState")?.let { o.put("lv12", it.toInt()) }
         if (!o.has("soc") && !o.has("v12") && lastErr.isNotEmpty()) o.put("err", lastErr)
         return o
     }

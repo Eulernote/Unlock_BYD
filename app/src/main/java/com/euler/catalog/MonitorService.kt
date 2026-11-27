@@ -51,6 +51,25 @@ class MonitorService : Service() {
     private var netCb: android.net.ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastPong = 0L
     @Volatile private var lastGrant = 0L
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+
+    /** Vigia (v81, método do Electro): a cada 20 s pede ao módulo de energia para não desligar a multimídia. */
+    private val wakeTick = object : Runnable {
+        override fun run() {
+            if (!running) return
+            if (Vigia.armed(applicationContext)) {
+                try { if (wakeLock?.isHeld != true) wakeLock?.acquire() } catch (_: Exception) {}
+                Thread {
+                    val r = try { CarCtl.local(applicationContext, "wake") } catch (e: Exception) { "erro ${e.message}" }
+                    Vigia.wakeLast = r; Vigia.wakeOk = r.startsWith("wakeUpMcu()=")
+                }.start()
+            } else {
+                Vigia.wakeOk = false
+                try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
+            }
+            ui.postDelayed(this, 20_000)
+        }
+    }
     private var ws: WebSocket? = null
     private var backoff = 5_000L
     private var running = false
@@ -64,6 +83,8 @@ class MonitorService : Service() {
         connect()
         ui.postDelayed(pinger, 30_000)
         ui.postDelayed(teleTick, 5_000)
+        try { wakeLock = (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "UnlockBYD:vigia").apply { setReferenceCounted(false) } } catch (_: Exception) {}
+        ui.postDelayed(wakeTick, 8_000)
         // As permissões de leitura da BYD podem precisar ser concedidas (best-effort, pelo ADB do carro).
         Thread {
             try { BydUnlock.apply(applicationContext) } catch (_: Throwable) {}
@@ -96,6 +117,7 @@ class MonitorService : Service() {
     override fun onDestroy() {
         running = false
         ui.removeCallbacksAndMessages(null)
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         try { netCb?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).unregisterNetworkCallback(it) } } catch (_: Exception) {}
         try { ws?.close(1000, "off") } catch (_: Exception) {}
         ws = null; connected = false
