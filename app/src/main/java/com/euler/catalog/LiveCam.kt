@@ -162,7 +162,6 @@ object LiveCam {
                     if (peers[v]?.mic == true && (!micRec || micErr.isNotEmpty()))
                         p.send(JSONObject().put("t", "mic").put("v", v).put("on", true).put("ok", false).put("msg", if (micErr.isNotEmpty()) micErr else "o microfone não começou a gravar"))
                 } }, 2500)
-                appCtx?.let { c -> main.post { try { android.widget.Toast.makeText(c, "🎤 Microfone do carro sendo ouvido pelo app do cliente", android.widget.Toast.LENGTH_LONG).show() } catch (_: Throwable) {} } }
             } else {
                 tr.sender.setTrack(null, false); p.mic = false
                 if (peers.values.none { it.mic }) for (q in peers.values) try { q.pc.setAudioRecording(false) } catch (_: Throwable) {}

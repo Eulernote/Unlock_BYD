@@ -23,8 +23,8 @@ android {
         // targetSdk 25 (v78): igual ao Electro e ao Overdrive — o firmware BYD só entrega as permissões
         // internas (ACC, bateria, ar) para apps nesse modo. Teste no Dolphin GS.
         targetSdk = 25
-        versionCode = 86
-        versionName = "9.3"
+        versionCode = 87
+        versionName = "9.4"
         // WebRTC (câmeras ao vivo) traz bibliotecas nativas: só ARM (as multimídias são ARM), APK menor.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
