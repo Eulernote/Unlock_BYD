@@ -25,6 +25,8 @@ function validUser(u){ return u.length >= 3 && u.length <= 60 && /^[a-z0-9._@+-]
 function cleanCode(c){ return String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 
 async function getMon(env, id){ return (await env.KV.get('mon:' + id, {type:'json'})) || {on:false, clients:[]}; }
+// on = câmeras ao vivo · ctl = controles do carro (liberados separadamente). Qualquer um dos dois abre o vínculo e a conexão.
+const monAny = (m) => !!(m && (m.on || m.ctl));
 async function putMon(env, id, m){ await env.KV.put('mon:' + id, JSON.stringify(m)); }
 async function getCli(env, u){ return await env.KV.get('cli:' + u, {type:'json'}); }
 async function putCli(env, u, c){ await env.KV.put('cli:' + u, JSON.stringify(c)); }
@@ -81,10 +83,10 @@ export async function handleMonitorStaff(request, env, p, user, H){
     const id = String(url.searchParams.get('id') || '');
     const m = await getMon(env, id);
     // Carros liberados antes do campo c.mon existir: sincroniza ao abrir a ficha no painel.
-    try{ const c = await H.getCar(env, id); if(c && (c.mon === true) !== !!m.on){ c.mon = !!m.on; await H.putCar(env, c); } }catch(e){}
+    try{ const c = await H.getCar(env, id); if(c && (c.mon === true) !== monAny(m)){ c.mon = monAny(m); await H.putCar(env, c); } }catch(e){}
     const resets = {};
     for(const u of (m.clients || [])){ try{ const r = await env.KV.get('reset:' + u, {type:'json'}); if(r) resets[u] = {code: r.code, at: r.at}; }catch(e){} }
-    return H.json({on: !!m.on, clients: m.clients || [], resets});
+    return H.json({on: !!m.on, ctl: !!m.ctl, clients: m.clients || [], resets});
   }
   const b = await request.json().catch(() => ({}));
   const id = String(b.id || '').trim();
@@ -93,15 +95,18 @@ export async function handleMonitorStaff(request, env, p, user, H){
   const m = await getMon(env, id);
 
   if(p === '/api/monitor' && request.method === 'POST'){
-    m.on = b.on === true; m.by = user; m.at = Date.now();
+    let acao = '';
+    if(typeof b.on === 'boolean'){ m.on = b.on; acao = m.on ? 'Câmeras ao vivo liberadas' : 'Câmeras ao vivo desligadas'; }
+    if(typeof b.ctl === 'boolean'){ m.ctl = b.ctl; acao = m.ctl ? 'Controles do carro liberados' : 'Controles do carro desligados'; }
+    m.by = user; m.at = Date.now();
     await putMon(env, id, m);
-    c.mon = m.on;   // vai junto no /api/register: o carro só abre a conexão das câmeras se estiver liberado
-    c.log.push({acao: m.on ? 'Monitoramento liberado' : 'Monitoramento desligado', by: user, when: H.fmt(Date.now()), cls: m.on ? 'a-act' : 'a-rev'});
+    c.mon = monAny(m);   // vai junto no /api/register: o carro só conecta no hub se câmeras ou controles estiverem liberados
+    if(acao) c.log.push({acao, by: user, when: H.fmt(Date.now()), cls: (b.on === true || b.ctl === true) ? 'a-act' : 'a-rev'});
     await H.putCar(env, c);
-    return H.json({ok:true, on:m.on});
+    return H.json({ok:true, on:!!m.on, ctl:!!m.ctl});
   }
   if(p === '/api/pair-code' && request.method === 'POST'){
-    if(!m.on) return H.json({error:'Monitoramento desligado para este carro'}, 400);
+    if(!monAny(m)) return H.json({error:'Monitoramento desligado para este carro'}, 400);
     const code = newCode();
     await env.KV.put('pair:' + cleanCode(code), JSON.stringify({car:id, by:user, at:Date.now()}), {expirationTtl: PAIR_TTL_S});
     return H.json({code: code, exp: Date.now() + PAIR_TTL_S * 1000});
@@ -130,7 +135,7 @@ export async function handleCarWs(request, env, p, H){
   const c = id ? await H.getCar(env, id) : null;
   if(!c || c.status !== 'active') return H.json({error:'car'}, 403);
   const m = await getMon(env, id);
-  if(!m.on) return H.json({error:'Monitoramento desligado'}, 403);
+  if(!monAny(m)) return H.json({error:'Monitoramento desligado'}, 403);
   const hdr = new Headers(request.headers); hdr.set('X-Role', 'car');
   return env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch(new Request(request.url, {headers: hdr}));
 }
@@ -162,10 +167,10 @@ export async function handleClient(request, env, p, H){
     if(!user) return H.json({error:'unauth'}, 401);
     const [cli, m, car] = await Promise.all([getCli(env, user), getMon(env, carId), H.getCar(env, carId)]);
     if(!cli || (cli.cars || []).indexOf(carId) < 0 || (m.clients || []).indexOf(user) < 0) return H.json({error:'unauth'}, 401);
-    if(!m.on || !car || car.status !== 'active') return H.json({error:'Monitoramento não liberado para este carro'}, 403);
+    if(!monAny(m) || !car || car.status !== 'active') return H.json({error:'Monitoramento não liberado para este carro'}, 403);
     const rnd = new Uint8Array(4); crypto.getRandomValues(rnd);
     const vid = user + '~' + [...rnd].map(x => x.toString(16).padStart(2, '0')).join('');
-    const hdr = new Headers(request.headers); hdr.set('X-Role', 'viewer'); hdr.set('X-Viewer', vid);
+    const hdr = new Headers(request.headers); hdr.set('X-Role', 'viewer'); hdr.set('X-Viewer', vid); hdr.set('X-Cam', m.on ? '1' : '0'); hdr.set('X-Ctl', m.ctl ? '1' : '0');
     return env.CAR_HUB.get(env.CAR_HUB.idFromName(carId)).fetch(new Request(request.url, {headers: hdr}));
   }
 
@@ -183,7 +188,7 @@ export async function handleClient(request, env, p, H){
     if(!pr) return H.json({error:'Código inválido ou expirado. Peça um novo à Unlock BYD.'}, 400);
     const car = await H.getCar(env, pr.car);
     const m = await getMon(env, pr.car);
-    if(!car || !m.on) return H.json({error:'Monitoramento não está liberado para este carro'}, 400);
+    if(!car || !monAny(m)) return H.json({error:'Monitoramento não está liberado para este carro'}, 400);
     const h = await clientHash(H, env, user, pass);
     let cli = await getCli(env, user);
     if(cli && cli.hash !== h) return H.json({error:'Este usuário já existe e a senha não confere'}, 401);
@@ -284,8 +289,8 @@ export async function handleClient(request, env, p, H){
       // Só mostra carros em que ele continua na lista (a equipe pode ter removido) e que estão ativos.
       if(!c || (m.clients || []).indexOf(user) < 0) continue;
       let online = false, bat = null;
-      if(env.CAR_HUB && m.on){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; if(bat && j.vig) bat.vig = j.vig.s; }catch(e){} }
-      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, seen: seen || c.seen || 0, online: online, bat: bat});
+      if(env.CAR_HUB && monAny(m)){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; if(bat && j.vig) bat.vig = j.vig.s; }catch(e){} }
+      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, controls: !!m.ctl, seen: seen || c.seen || 0, online: online, bat: bat});
     }
     return H.json({user:user, cars:cars});
   }
@@ -335,7 +340,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-11';
+const V = 'ubyd-c-12';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -396,6 +401,9 @@ input:focus{border-color:var(--ac)}
 .live.fs .fsbtn{display:none}
 .ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:16px;color:#c9d1dc;font-size:13.5px;background:rgba(0,0,0,.6)}
 .on{color:var(--gr)}.off{color:var(--fa)}
+.ctl{margin-top:12px;border-top:1px solid rgba(128,128,128,.2);padding-top:10px}.ctlh{font-weight:700;margin-bottom:8px}.cg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.cb{border:1px solid rgba(128,128,128,.35);background:rgba(128,128,128,.08);color:inherit;border-radius:12px;padding:11px 8px;font-size:14px;cursor:pointer}.cb:active{transform:scale(.97)}.cb.cp{background:#2bb0a6;border-color:#2bb0a6;color:#04201d;font-weight:700}
+.cr{display:flex;justify-content:space-between;align-items:center;margin:8px 0}.st{display:flex;align-items:center;gap:10px}.st .cb{width:42px;padding:8px 0;font-size:18px}.st b{min-width:54px;text-align:center}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chip{background:var(--s2);border:1px solid var(--bd);color:var(--tx);border-radius:99px;padding:6px 12px;font-size:13px}.chip.sel{background:var(--ac);color:#04201D;border-color:var(--ac);font-weight:700}
 select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-radius:10px;padding:6px 8px;font-size:13px}
 .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--s2);border:1px solid var(--bd);color:var(--mu)}
@@ -485,24 +493,53 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
  api('/c/api/me').then(function(r){
   if(!r.cars.length){$('cars').innerHTML='<div class="card"><h2>Nenhum carro vinculado</h2><p class="sub" style="margin:0">Peça um código de vínculo à Unlock BYD e toque em "Vincular outro carro".</p></div>';return;}
   CARS=r.cars;$('cars').innerHTML=r.cars.map(function(c,i){
-   var st=!c.active?'<span class="tag" style="color:var(--am)">Acesso suspenso</span>':(!c.monitor?'<span class="tag">Monitoramento desligado</span>':'<span class="tag" style="color:var(--gr)">Monitoramento liberado</span>');
+   var st=!c.active?'<span class="tag" style="color:var(--am)">Acesso suspenso</span>':(!(c.monitor||c.controls)?'<span class="tag">Monitoramento desligado</span>':'<span class="tag" style="color:var(--gr)">'+(c.monitor&&c.controls?'Câmeras e controles liberados':c.monitor?'Câmeras liberadas':'Controles liberados')+'</span>');
    var conn=c.online?'<span class="on">● Online agora</span>':'<span class="off">○ Desligado ou sem internet · último contato '+ago(c.seen)+'</span>';
-   var can=c.active&&c.monitor;
+   var can=c.active&&c.monitor,cc=c.active&&c.controls;
    return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
     (c.bat?teleAlert(c.bat,c.bat.vig):'')+(c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b> &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b> <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
-    (can?'<button class="link" style="padding-top:8px;text-align:left" onclick="toggleBat('+i+')">📈 Bateria e consumo</button><div id="bat-'+i+'" class="hide" style="margin-top:6px"></div>':'')+
+    (cc?ctlPanel(i):'')+
+    ((can||cc)?'<button class="link" style="padding-top:8px;text-align:left" onclick="toggleBat('+i+')">📈 Bateria e consumo</button><div id="bat-'+i+'" class="hide" style="margin-top:6px"></div>':'')+
     (can?('<div class="live" id="live-'+i+'"><video id="vid-'+i+'" playsinline muted autoplay onclick="openFull('+i+')"></video><canvas id="cv-'+i+'" onclick="openFull('+i+')"></canvas><div class="fsbar" id="fsb-'+i+'"></div><button class="fsbtn" onclick="openFull('+i+')">⛶</button><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
       (DIAG?'<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>':'')+
       '<div class="chips" id="cams-'+i+'"></div>'+
       (DIAG?'<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Padrão (720x576)</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">H264 (padrão)</option><option>VP8</option></select></div>':'')+
       '<button class="btn btn-p" id="pb-'+i+'" onclick="toggleLive('+i+')">▶ Ver ao vivo</button>')
-     :'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>')+
+     :(cc?'':'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>'))+
     '<button class="link" style="color:var(--fa);font-size:12.5px" onclick="unlink('+i+')">Desvincular este carro</button></div>';
   }).join('');
  }).catch(function(x){$('cars').innerHTML='<div class="card"><div class="err">'+esc(x.message)+'</div><button class="btn btn-g" onclick="loadMe()">Tentar de novo</button></div>';});}
 function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste login?'))return;api('/c/api/unlink',{car:c.id}).then(loadMe).catch(function(x){alert(x.message);});}
+
+/* controles do carro */
+var CTL={};
+function ctlPanel(i){var s=CTL[i]||(CTL[i]={temp:22,fan:3});var b=function(cmd,n,t,cls){return '<button class="cb'+(cls?' '+cls:'')+'" onclick="ctl('+i+',\\''+cmd+'\\','+(n==null?'null':n)+')">'+t+'</button>';};
+ return '<div class="ctl"><div class="ctlh">🎛 Controles</div>'+
+  '<div class="cg">'+b('ac_on',null,'🚗 Ligar o carro','cp')+b('ac_off',null,'⏻ Desligar')+'</div>'+
+  '<div class="cr"><span>🌡 Temperatura</span><span class="st">'+b('temp',-1,'−')+'<b id="ct-'+i+'">'+s.temp+' °C</b>'+b('temp',1,'+')+'</span></div>'+
+  '<div class="cr"><span>🌀 Ventilação</span><span class="st">'+b('fan',-1,'−')+'<b id="cf-'+i+'">'+s.fan+'</b>'+b('fan',1,'+')+'</span></div>'+
+  '<div class="cg">'+b('lock',null,'🔒 Trancar')+b('unlock',null,'🔓 Destrancar')+'</div>'+
+  '<div class="cg">'+b('flash',null,'💡 Piscar')+b('find',null,'📣 Achar o carro')+'</div>'+
+  '<div class="cg">'+b('win',1,'⬇ Abrir janelas')+b('win',2,'⬆ Fechar janelas')+'</div>'+
+  '<div class="dot" id="cs-'+i+'" style="min-height:18px;margin-top:6px"></div></div>';}
+var CTLN={ac_on:'Ligando o carro (ar)',ac_off:'Desligando',temp:'Ajustando a temperatura',fan:'Ajustando a ventilação',lock:'Trancando',unlock:'Destrancando',flash:'Piscando os faróis',find:'Piscando e buzinando',win:'Movendo as janelas'};
+function ctl(i,cmd,n){var c=CARS[i],s=CTL[i];if(!c||!s)return;var st=$('cs-'+i);
+ if(cmd==='temp'){s.temp=Math.max(17,Math.min(33,s.temp+n));n=s.temp;$('ct-'+i).textContent=n+' °C';}
+ if(cmd==='fan'){s.fan=Math.max(1,Math.min(7,s.fan+n));n=s.fan;$('cf-'+i).textContent=n;}
+ if(cmd==='win'&&n===1&&!confirm('Abrir as janelas do carro?'))return;
+ clearTimeout(s.deb);s.deb=setTimeout(function(){
+  st.textContent='⏳ '+CTLN[cmd]+'…';st.style.color='var(--mu)';
+  var done=false,ws=new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+location.host+'/c/ws?car='+encodeURIComponent(c.id)+'&t='+encodeURIComponent(T));
+  var end=function(t,ok){if(done)return;done=true;clearTimeout(to);st.textContent=t;st.style.color=ok?'var(--gr)':'var(--am)';try{ws.close();}catch(e){}};
+  var to=setTimeout(function(){end('✕ O carro não respondeu. Tente de novo.',false);},30000);
+  ws.onmessage=function(e){var m;try{m=JSON.parse(e.data);}catch(x){return;}
+   if(m.t==='hello'){if(!m.online)end('✕ O carro está desligado da internet agora.',false);else ws.send(JSON.stringify({t:'ctl',cmd:cmd,n:n}));}
+   else if(m.t==='ctlres')end(m.ok?'✓ Feito':'✕ '+(m.msg||'Não funcionou neste carro'),m.ok);
+   else if(m.t==='offline')end('✕ O carro está desligado da internet agora.',false);};
+  ws.onerror=function(){end('✕ Sem conexão com o servidor.',false);};
+ },(cmd==='temp'||cmd==='fan')?700:0);}
 
 /* bateria (telemetria) */
 function nb(v,d){return v==null?'—':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});}

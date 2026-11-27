@@ -111,7 +111,7 @@ export class CarHub {
       if(this.viewers().length >= MAX_VIEWERS) return new Response('muitos celulares assistindo', {status: 429});
       const vid = (request.headers.get('X-Viewer') || 'anon').slice(0, 120);
       this.ctx.acceptWebSocket(server, ['viewer', 'v:' + vid]);
-      server.serializeAttachment({role: 'viewer', vid});
+      server.serializeAttachment({role: 'viewer', vid, cam: request.headers.get('X-Cam') !== '0', ctl: request.headers.get('X-Ctl') === '1'});
       const ice = await iceServers(this.env);
       send(server, {t: 'hello', online: !!this.car(), ice, iceErr});
     } else {
@@ -134,6 +134,16 @@ export class CarHub {
     }
     if(a.role === 'viewer'){
       const car = this.car();
+      if(m.t === 'ctl'){
+        // Controles do carro: só se liberados no painel, e só comandos conhecidos.
+        if(!a.ctl) return send(ws, {t: 'ctlres', ok: false, msg: 'Controles não liberados para este carro'});
+        if(!car) return send(ws, {t: 'offline'});
+        const cmd = String(m.cmd || ''), n = Math.round(Number(m.n));
+        const ok = {lock:1, unlock:1, flash:1, find:1, ac_on:1, ac_off:1}[cmd] || (cmd === 'temp' && n >= 17 && n <= 33) || (cmd === 'fan' && n >= 1 && n <= 7) || (cmd === 'win' && n >= 1 && n <= 3);
+        if(!ok) return send(ws, {t: 'ctlres', ok: false, msg: 'comando inválido'});
+        return send(car, {t: 'ctl', v: a.vid, cmd, n: (cmd === 'temp' || cmd === 'fan' || cmd === 'win') ? n : 0});
+      }
+      if(m.t === 'start' && a.cam === false) return send(ws, {t: 'error', msg: 'Câmeras não liberadas para este carro'});
       if(m.t === 'start'){
         if(!car) return send(ws, {t: 'offline'});
         send(car, {t: 'start', v: a.vid, cam: String(m.cam || 'auto').slice(0, 20), size: String(m.size || 'auto').slice(0, 12), codec: String(m.codec || 'auto').slice(0, 8), ice: await iceServers(this.env)});

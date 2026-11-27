@@ -796,18 +796,20 @@ function detailTab(t){DTAB=t;document.querySelectorAll('#d-tabs .chip').forEach(
 var monCodeTimer=null;
 function loadMon(id){var el=document.getElementById('d-mon');if(!el)return;
  api('/api/monitor?id='+encodeURIComponent(id)).then(function(m){var h='';
-  h+='<div style="margin-bottom:8px">'+(m.on?'<span style="color:#27c08a;font-weight:650">● Liberado</span> <span style="color:var(--faint)">· o cliente pode vincular o celular</span>':'<span style="color:var(--faint)">○ Desligado</span>')+'</div>';
-  if(m.on){
+  var sw=function(k,on,t,d){return '<div class="logrow" style="align-items:center"><span><b style="color:var(--text)">'+t+'</b><br><span style="color:var(--faint);font-size:11.5px">'+d+'</span></span><button class="btn" style="min-width:92px;'+(on?'background:#27c08a;color:#04201d;border:0':'background:var(--surface2);color:var(--muted);border:1px solid var(--border)')+'" onclick="monToggle(\\''+id+'\\',\\''+k+'\\','+(!on)+')">'+(on?'● Ligado':'○ Desligado')+'</button></div>';};
+  h+=sw('on',m.on,'📷 Câmeras ao vivo','ver as câmeras pelo app do cliente');
+  h+=sw('ctl',m.ctl,'🎛 Controles do carro','ligar o carro (ar), temperatura, travas, janelas');
+  h+='<div style="height:8px"></div>';
+  if(m.on||m.ctl){
    h+='<div id="mon-code"></div><button class="btn btn-approve" style="width:100%;margin-bottom:8px" onclick="genCode(\\''+id+'\\')">Gerar código de vínculo</button>';
    h+='<div style="margin:6px 0 4px;color:var(--muted)">Celulares vinculados ('+m.clients.length+')</div>';
    if(!m.clients.length)h+='<div style="color:var(--faint);margin-bottom:8px">Nenhum ainda.</div>';
    m.clients.forEach(function(u){h+='<div class="logrow"><span class="logby" style="color:var(--text)">'+esc(u)+((m.resets&&m.resets[u])?'<br><span style="color:#f2c25b;font-weight:650">🔑 pediu nova senha — código <b style="font-family:ui-monospace,Menlo,monospace;letter-spacing:2px">'+m.resets[u].code+'</b></span>':'')+'</span><a href="#" style="color:var(--red);font-size:12px" onclick="monUnlink(\\''+id+'\\',\\''+encodeURIComponent(u)+'\\');return false">remover</a></div>';});
    h+='<div style="color:var(--faint);font-size:11.5px;margin:8px 0">Endereço do app do cliente: <b style="color:var(--text)">'+location.origin+'/c</b></div>';
-   h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--muted);border:1px solid var(--border)" onclick="monToggle(\\''+id+'\\',false)">Desligar monitoramento</button>';
-  } else h+='<button class="btn" style="width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border)" onclick="monToggle(\\''+id+'\\',true)">Liberar monitoramento</button>';
+  } else h+='<div style="color:var(--faint)">Ligue câmeras ou controles para gerar o código de vínculo do cliente.</div>';
   el.innerHTML=h;el.style.color='var(--text)';
  }).catch(function(){el.textContent='Não consegui carregar.';});}
-function monToggle(id,on){api('/api/monitor',{method:'POST',body:{id:id,on:on}}).then(function(){toast(on?'Monitoramento liberado':'Monitoramento desligado');loadMon(id);}).catch(function(){toast('Falha ao alterar');});}
+function monToggle(id,k,on){var b={id:id};b[k]=on;api('/api/monitor',{method:'POST',body:b}).then(function(){toast((k==='ctl'?'Controles ':'Câmeras ')+(on?'liberados':'desligados'));loadMon(id);}).catch(function(){toast('Falha ao alterar');});}
 function monUnlink(id,u){u=decodeURIComponent(u);if(!confirm('Remover o celular '+u+' deste carro?'))return;api('/api/monitor-unlink',{method:'POST',body:{id:id,user:u}}).then(function(){toast('Celular removido');loadMon(id);}).catch(function(){toast('Falha ao remover');});}
 function genCode(id){api('/api/pair-code',{method:'POST',body:{id:id}}).then(function(r){var el=document.getElementById('mon-code');if(!el)return;
   if(monCodeTimer)clearInterval(monCodeTimer);
