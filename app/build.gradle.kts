@@ -72,7 +72,7 @@ dependencies {
     // Cliente ADB: shell no próprio carro via 127.0.0.1:5555 (Device Owner sem notebook, cluster).
     implementation("dev.mobile:dadb:1.2.10")
     // Voz offline do assistente (reconhecimento, palavra de ativação, VAD) — modelos baixados do R2.
-    implementation("com.k2fsa.sherpa.onnx:sherpa-onnx-android:1.12.14")
+    implementation("com.k2fsa.sherpa.onnx:sherpa-onnx-android:1.+")
     // Câmeras ao vivo (v60): WebRTC pré-compilado + WebSocket pro hub de sinalização.
     implementation("io.github.webrtc-sdk:android:114.5735.10")   // WebRTC puro (Java), sem dependência de Kotlin novo
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
