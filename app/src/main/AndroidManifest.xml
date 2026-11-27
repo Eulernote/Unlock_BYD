@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Telemetria da bateria (tração e 12V) pela API da BYD -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.DEVICE_ACC" />
     <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.BYDAUTO_STATISTIC_GET" />

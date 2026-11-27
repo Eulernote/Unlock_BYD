@@ -208,6 +208,7 @@ class MonitorService : Service() {
                     "cam" -> if (v.isNotEmpty()) LiveCam.switchCam(v, m.optString("cam", "auto"), m.optString("size", "auto"))
                     "answer" -> if (v.isNotEmpty()) LiveCam.answer(v, m.optString("sdp"))
                     "stop" -> if (v.isNotEmpty()) LiveCam.stop(v)
+                    "mic" -> if (v.isNotEmpty()) LiveCam.mic(v, m.optBoolean("on", false))
                     "ctl" -> if (v.isNotEmpty()) runCtl(m.optString("cmd"), m.optInt("n", 0)) { ok, msg -> send(JSONObject().put("t", "ctlres").put("v", v).put("ok", ok).put("msg", msg)) }
                 }
             }

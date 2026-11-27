@@ -18,7 +18,7 @@ object CarCtl {
     /** Permissões da BYD que o app precisa (concedidas pelo ADB). O ar e as janelas rodam DENTRO do app, como no Sentry. */
     val PERMS = listOf("BYDAUTO_STATISTIC_GET", "BYDAUTO_BODYWORK_GET", "BYDAUTO_BMS_GET", "BYDAUTO_POWER_GET", "BYDAUTO_ENERGY_GET",
         "BYDAUTO_AC_GET", "BYDAUTO_AC_SET", "BYDAUTO_AC_COMMON", "BYDAUTO_BODYWORK_SET", "BYDAUTO_BODYWORK_COMMON",
-        "BYDAUTO_DOORLOCK_GET", "BYDAUTO_DOOR_LOCK_GET", "BYDAUTO_LIGHT_GET", "BYDAUTO_LIGHT_SET")
+        "BYDAUTO_DOORLOCK_GET", "BYDAUTO_DOOR_LOCK_GET", "BYDAUTO_LIGHT_GET", "BYDAUTO_LIGHT_SET", "RECORD_AUDIO", "CAMERA")
     /** Comandos que precisam do shell (quadro bruto no BYDAutoManager). O resto roda no app. */
     val SHELL_CMDS = setOf("lock", "unlock", "flash", "find", "buf")
 

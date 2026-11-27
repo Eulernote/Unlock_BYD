@@ -71,7 +71,12 @@ object LiveCam {
     private var defH = 0
     private var sizeMode = "auto"
 
-    private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false)
+    private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false, var audio: RtpTransceiver? = null, var mic: Boolean = false)
+    // Microfone (v85): trilha de áudio criada só quando algum celular pede para ouvir.
+    private var adm: org.webrtc.audio.JavaAudioDeviceModule? = null
+    private var audioSrc: org.webrtc.AudioSource? = null
+    private var audioTrack: org.webrtc.AudioTrack? = null
+    @Volatile private var appCtx: Context? = null
     private val peers = HashMap<String, Peer>()
     private val timeouts = HashMap<String, Runnable>()
 
@@ -86,7 +91,9 @@ object LiveCam {
             selectCam(cam, size)
             stopPeer(v, closeCamIfIdle = false)
             val pc = createPeer(v, ice, codec, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
-            peers[v] = Peer(pc, send)
+            // Áudio já negociado (sem trilha = silêncio, microfone fechado); liga quando o celular pede ("mic").
+            val atr = try { pc.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY, listOf("cam"))) } catch (t: Throwable) { null }
+            peers[v] = Peer(pc, send, audio = atr)
             pc.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(sdp: SessionDescription) {
                     exec.execute {
@@ -129,6 +136,42 @@ object LiveCam {
         p.pc.setRemoteDescription(object : SdpAdapter() {
             override fun onSetFailure(e: String?) { Log.w(TAG, "setRemote $e") }
         }, SessionDescription(SessionDescription.Type.ANSWER, sdp))
+    }
+
+    /** Liga/desliga o microfone do carro para este celular. */
+    fun mic(v: String, on: Boolean) = exec.execute {
+        val p = peers[v] ?: return@execute
+        try {
+            val tr = p.audio ?: throw IllegalStateException("esta conexão não tem áudio — feche e abra a câmera de novo")
+            if (on) {
+                val t = ensureAudioTrack()
+                tr.sender.setTrack(t, false); t.setEnabled(true); p.mic = true
+                adm?.setMicrophoneMute(false)
+                appCtx?.let { c -> main.post { try { android.widget.Toast.makeText(c, "🎤 Microfone do carro sendo ouvido pelo app do cliente", android.widget.Toast.LENGTH_LONG).show() } catch (_: Throwable) {} } }
+            } else {
+                tr.sender.setTrack(null, false); p.mic = false
+            }
+            if (peers.values.none { it.mic }) releaseAudio()
+            p.send(JSONObject().put("t", "mic").put("v", v).put("on", p.mic).put("ok", true))
+        } catch (t: Throwable) {
+            Log.e(TAG, "mic", t)
+            p.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", msgOf(t)))
+        }
+    }
+
+    private fun ensureAudioTrack(): org.webrtc.AudioTrack {
+        audioTrack?.let { return it }
+        val f = factory ?: throw IllegalStateException("sem WebRTC")
+        val src = f.createAudioSource(MediaConstraints()); audioSrc = src
+        return f.createAudioTrack("mic0", src).also { audioTrack = it }
+    }
+
+    private fun releaseAudio() {
+        val t = audioTrack ?: return
+        for (p in peers.values) try { if (p.audio?.sender?.track() != null) p.audio?.sender?.setTrack(null, false) } catch (_: Throwable) {}
+        try { t.dispose() } catch (_: Throwable) {}
+        try { audioSrc?.dispose() } catch (_: Throwable) {}
+        audioTrack = null; audioSrc = null
     }
 
     fun stop(v: String) = exec.execute { stopPeer(v) }
@@ -184,7 +227,16 @@ object LiveCam {
         if (factory != null) return
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(ctx).createInitializationOptions())
         val e = EglBase.create(); egl = e
-        factory = PeerConnectionFactory.builder()
+        appCtx = ctx
+        // Microfone: fonte MIC (o "VOICE_COMMUNICATION" pode ser desviado pela central de mídia do carro).
+        val a = try {
+            org.webrtc.audio.JavaAudioDeviceModule.builder(ctx)
+                .setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+                .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
+                .createAudioDeviceModule()
+        } catch (t: Throwable) { null }
+        adm = a
+        factory = PeerConnectionFactory.builder().apply { if (a != null) setAudioDeviceModule(a) }
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(e.eglBaseContext, true, false))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(e.eglBaseContext))
             .createPeerConnectionFactory()
@@ -289,6 +341,7 @@ object LiveCam {
     private fun stopPeer(v: String, closeCamIfIdle: Boolean = true) {
         timeouts.remove(v)?.let { main.removeCallbacks(it) }
         peers.remove(v)?.let { try { it.pc.dispose() } catch (_: Throwable) {} }
+        if (peers.values.none { it.mic }) try { releaseAudio() } catch (_: Throwable) {}
         if (closeCamIfIdle && peers.isEmpty()) closeCamera()
         lastStatus = if (peers.isEmpty()) "parado" else "transmitindo p/ ${peers.size}"
     }
