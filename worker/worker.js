@@ -8,6 +8,7 @@
  */
 
 import { handleClient, handleMonitorStaff, handleCarWs } from './cliente.js';
+import { TELE_UI_JS } from './tele.js';
 export { CarHub } from './cliente.js';
 
 const USERS = ['euler', 'luis', 'richard'];
@@ -779,7 +780,8 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  T.plano+=h;
  T.hist='<div id="d-log"></div>';
  // Abas: abre na última usada (fica nela depois de uma ação que reabre a ficha).
- var TABS=[['plano','Assinatura'],['mon','Monitoramento'],['dono','Device Owner'],['hist','Histórico'],['teste','Teste · Excluir']];
+ T.bat='<div id="d-tele"></div>';
+ var TABS=[['plano','Assinatura'],['mon','Monitoramento'],['bat','Bateria'],['dono','Device Owner'],['hist','Histórico'],['teste','Teste · Excluir']];
  if(DCAR!==c.id){DCAR=c.id;DTAB='plano';}
  if(!DTAB||!T[DTAB])DTAB='plano';
  document.getElementById('d-tabs').innerHTML=TABS.map(function(t){return '<span class="chip'+(t[0]===DTAB?' on':'')+'" data-t="'+t[0]+'" onclick="detailTab(\\''+t[0]+'\\')">'+t[1]+'</span>';}).join('');
@@ -787,7 +789,7 @@ function openDetail(id){var c=cars.filter(function(x){return x.id===id;})[0];if(
  var log=(c.log||[]).slice().reverse();var dl=document.getElementById('d-log');
  if(!log.length){dl.innerHTML='<div class="empty">Nenhuma ação ainda — registrado '+c.reg+', aguardando aprovação.</div>';}
  else{dl.innerHTML=log.map(function(e){var col=userColor(e.by);return '<div class="logrow"><span class="logact '+e.cls+'">'+e.acao+'</span><span class="logby">por <span style="color:'+col+';font-weight:650">'+e.by+'</span></span><span class="logwhen">'+e.when+'</span></div>';}).join('');}
- document.getElementById('detail').style.display='flex';planPreview();loadMon(c.id);}
+ document.getElementById('detail').style.display='flex';planPreview();loadMon(c.id);var te=document.getElementById('d-tele');if(te&&window.teleWidget)teleWidget(te,function(h){return api('/api/tele?id='+encodeURIComponent(c.id)+'&h='+h);});}
 var DTAB='plano',DCAR=null;
 function detailTab(t){DTAB=t;document.querySelectorAll('#d-tabs .chip').forEach(function(x){x.classList.toggle('on',x.getAttribute('data-t')===t);});
  document.querySelectorAll('#d-actions .dpane').forEach(function(x){x.style.display=x.getAttribute('data-t')===t?'block':'none';});}
@@ -1230,4 +1232,4 @@ function doLogout(){TOKEN=null;currentUser=null;try{localStorage.removeItem('uby
 function logout(){doLogout();}
 if(TOKEN){setWho();document.getElementById('login').style.display='none';loadCars();}
 render();
-</script></body></html>`;
+</script><script>${TELE_UI_JS}</script></body></html>`;

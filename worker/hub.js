@@ -55,6 +55,20 @@ export class CarHub {
     try{ ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong')); }catch(e){}
   }
 
+  // ---- telemetria da bateria (SQLite do próprio objeto: 1 linha a cada ~2 min, guarda 30 dias) ----
+  sql(){ if(!this._sqlOk){ this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS tele(ts INTEGER PRIMARY KEY, soc REAL, v12 REAL, lvl INTEGER, sys INTEGER)'); this._sqlOk = true; } return this.ctx.storage.sql; }
+  saveTele(m){
+    const num = (x) => (typeof x === 'number' && isFinite(x)) ? x : null;
+    const soc = num(m.soc), v12 = num(m.v12);
+    if(soc == null && v12 == null) return;
+    let now = Date.now();
+    // O carro pode mandar o horário da leitura (ex.: leituras guardadas enquanto estava sem internet).
+    if(typeof m.ts === 'number' && m.ts > now - 31 * 86400000 && m.ts <= now + 60000) now = Math.round(m.ts);
+    this.sql().exec('INSERT OR REPLACE INTO tele(ts, soc, v12, lvl, sys) VALUES (?, ?, ?, ?, ?)', now, soc, v12, num(m.v12lvl), num(m.sys));
+    if(Math.random() < 0.02) this.sql().exec('DELETE FROM tele WHERE ts < ?', now - 30 * 86400000);
+  }
+  lastTele(){ try{ const r = this.sql().exec('SELECT ts, soc, v12 FROM tele ORDER BY ts DESC LIMIT 1').toArray(); return r[0] || null; }catch(e){ return null; } }
+
   cars(except){ return this.ctx.getWebSockets('car').filter(w => w !== except); }
   // O carro mais recente e ABERTO: depois de trocar de rede, a conexão antiga pode demorar a sumir da lista.
   car(){
@@ -71,7 +85,15 @@ export class CarHub {
 
   async fetch(request){
     const url = new URL(request.url);
-    if(url.pathname === '/status') return Response.json({online: !!this.car(), viewers: this.viewers().length});
+    if(url.pathname === '/status') return Response.json({online: !!this.car(), viewers: this.viewers().length, bat: this.lastTele()});
+    if(url.pathname === '/tele'){
+      const h = Math.min(24 * 30, Math.max(1, Number(url.searchParams.get('h')) || 24));
+      let rows = [];
+      try{ rows = this.sql().exec('SELECT ts, soc, v12 FROM tele WHERE ts >= ? ORDER BY ts', Date.now() - h * 3600000).toArray(); }catch(e){}
+      // Muitos pontos (7 dias): fica com no máximo ~800, sem perder o começo e o fim.
+      if(rows.length > 800){ const step = rows.length / 800, out = []; for(let i = 0; i < 800; i++) out.push(rows[Math.floor(i * step)]); out.push(rows[rows.length - 1]); rows = out; }
+      return Response.json({last: this.lastTele(), rows});
+    }
     if(request.headers.get('Upgrade') !== 'websocket') return new Response('esperava websocket', {status: 426});
 
     const role = request.headers.get('X-Role');
@@ -103,6 +125,7 @@ export class CarHub {
     const a = ws.deserializeAttachment() || {};
 
     if(a.role === 'car'){
+      if(m && m.t === 'tele'){ try{ this.saveTele(m); }catch(e){} return; }
       // carro → celular específico
       if(!m || !m.v) return;
       for(const v of this.ctx.getWebSockets('v:' + m.v)) send(v, m);

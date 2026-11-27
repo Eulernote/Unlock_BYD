@@ -11,6 +11,7 @@
 //  As câmeras ao vivo entram depois do teste da v59 no carro; aqui fica a base (login + vínculo).
 // ============================================================================
 import { ICON_180, ICON_192, ICON_512 } from './cliente-icons.js';
+import { TELE_UI_JS } from './tele.js';
 export { CarHub } from './hub.js';
 
 const CLIENT_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30;  // 30 dias: cara de app, sem pedir senha toda hora
@@ -66,6 +67,12 @@ function b64png(b64){
 //  Rotas da EQUIPE (já autenticada no painel): liga monitoramento, gera código, remove celular
 // ---------------------------------------------------------------------------
 export async function handleMonitorStaff(request, env, p, user, H){
+  if(p === '/api/tele'){
+    if(!user) return H.json({error:'unauth'}, 401);
+    if(!env.CAR_HUB) return H.json({last:null, rows:[]});
+    const u = new URL(request.url), id = String(u.searchParams.get('id') || '');
+    return env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/tele?h=' + encodeURIComponent(u.searchParams.get('h') || '24'));
+  }
   if(!(p === '/api/monitor' || p === '/api/pair-code' || p === '/api/monitor-unlink')) return null;
   if(!user) return H.json({error:'unauth'}, 401);
   const url = new URL(request.url);
@@ -276,11 +283,19 @@ export async function handleClient(request, env, p, H){
       const [c, m, seen] = await Promise.all([H.getCar(env, id), getMon(env, id), H.getSeen(env, id)]);
       // Só mostra carros em que ele continua na lista (a equipe pode ter removido) e que estão ativos.
       if(!c || (m.clients || []).indexOf(user) < 0) continue;
-      let online = false;
-      if(env.CAR_HUB && m.on){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); online = !!(await r.json()).online; }catch(e){} }
-      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, seen: seen || c.seen || 0, online: online});
+      let online = false, bat = null;
+      if(env.CAR_HUB && m.on){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; }catch(e){} }
+      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, seen: seen || c.seen || 0, online: online, bat: bat});
     }
     return H.json({user:user, cars:cars});
+  }
+
+  if(p === '/c/api/tele' && request.method === 'GET'){
+    const u = new URL(request.url), id = String(u.searchParams.get('car') || '');
+    const m = await getMon(env, id);
+    if((cli.cars || []).indexOf(id) < 0 || (m.clients || []).indexOf(user) < 0) return H.json({error:'unauth'}, 401);
+    if(!env.CAR_HUB) return H.json({last:null, rows:[]});
+    return env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/tele?h=' + encodeURIComponent(u.searchParams.get('h') || '24'));
   }
 
   if(p === '/c/api/unlink' && request.method === 'POST'){
@@ -320,7 +335,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-9';
+const V = 'ubyd-c-10';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -475,6 +490,8 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
    var can=c.active&&c.monitor;
    return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
+    (c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b> &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b> <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
+    (can?'<button class="link" style="padding-top:8px;text-align:left" onclick="toggleBat('+i+')">📈 Bateria e consumo</button><div id="bat-'+i+'" class="hide" style="margin-top:6px"></div>':'')+
     (can?('<div class="live" id="live-'+i+'"><video id="vid-'+i+'" playsinline muted autoplay onclick="openFull('+i+')"></video><canvas id="cv-'+i+'" onclick="openFull('+i+')"></canvas><div class="fsbar" id="fsb-'+i+'"></div><button class="fsbtn" onclick="openFull('+i+')">⛶</button><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
       (DIAG?'<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>':'')+
@@ -486,6 +503,11 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
   }).join('');
  }).catch(function(x){$('cars').innerHTML='<div class="card"><div class="err">'+esc(x.message)+'</div><button class="btn btn-g" onclick="loadMe()">Tentar de novo</button></div>';});}
 function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste login?'))return;api('/c/api/unlink',{car:c.id}).then(loadMe).catch(function(x){alert(x.message);});}
+
+/* bateria (telemetria) */
+function nb(v,d){return v==null?'—':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});}
+function toggleBat(i){var el=$('bat-'+i),c=CARS[i];if(!el||!c)return;var open=el.classList.toggle('hide')===false;
+ if(open&&!el._w)el._w=teleWidget(el,function(h){return api('/c/api/tele?car='+encodeURIComponent(c.id)+'&h='+h);});}
 
 /* esqueci a senha */
 var FG={u:'',rt:''};
@@ -586,4 +608,4 @@ function doInstall(){if(!deferred)return;deferred.prompt();deferred.userChoice.t
 if('serviceWorker' in navigator){navigator.serviceWorker.register('/c/sw.js',{scope:'/c/'}).catch(function(){});}
 maybeHint();
 show(T?'home':'login');
-</script></body></html>`;
+</script><script>${TELE_UI_JS}</script></body></html>`;
