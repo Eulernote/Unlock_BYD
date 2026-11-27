@@ -91,24 +91,32 @@ class VoiceEngine(
                 val buf = ShortArray(FRAME)
                 var falou = false
                 var silencioMs = 0
+                var pico = 0.0
+                var totalFrames = 0
                 val inicio = System.currentTimeMillis()
                 while (System.currentTimeMillis() - inicio < 8000) {
                     val n = audio.read(buf, 0, buf.size)
                     if (n <= 0) continue
+                    totalFrames++
                     var soma = 0.0
                     for (i in 0 until n) { val v = buf[i] / 32768.0f; soma += (v * v).toDouble() }
                     val rms = sqrt(soma / n)
+                    if (rms > pico) pico = rms
                     rec.acceptWaveForm(buf, n)
-                    if (rms > 0.018) { falou = true; silencioMs = 0 }
-                    else if (falou) { silencioMs += 100; if (silencioMs >= 700) break }
-                    else if (System.currentTimeMillis() - inicio > 4000) break
+                    if (rms > 0.006) { falou = true; silencioMs = 0 }
+                    else if (falou) { silencioMs += 100; if (silencioMs >= 800) break }
+                    else if (System.currentTimeMillis() - inicio > 5000) break
                 }
-                if (falou) {
-                    CrashLog.stage(ctx, "voz: reconhecendo a fala")
-                    val texto = textoDe(rec.finalResult)
-                    CrashLog.stage(ctx, "voz: reconhecido = \"$texto\"")
-                    if (texto.isNotBlank()) onText(texto) else onError("Nao entendi. Tente de novo.")
-                } else onError("Nao ouvi nada. Fale logo apos tocar o botao.")
+                val nivel = String.format("%.4f", pico)
+                CrashLog.stage(ctx, "voz: captura fim (nivelMax=$nivel frames=$totalFrames falou=$falou)")
+                // Sempre tenta transcrever: mesmo com microfone fraco o Vosk pode ter captado algo.
+                val texto = textoDe(rec.finalResult)
+                CrashLog.stage(ctx, "voz: reconhecido = \"$texto\"")
+                when {
+                    texto.isNotBlank() -> onText(texto)
+                    pico < 0.004 -> onError("Microfone nao capta audio (nivel $nivel). Mic ocupado/conflito.")
+                    else -> onError("Nao entendi (nivel $nivel). Fale mais alto/claro apos tocar.")
+                }
             } catch (e: Throwable) {
                 onError("Erro na captura: ${e.message}"); CrashLog.write(ctx, "voz-captura", e)
             } finally {
