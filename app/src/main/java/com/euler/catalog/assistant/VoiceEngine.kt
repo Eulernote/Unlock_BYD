@@ -48,6 +48,16 @@ class VoiceEngine(
 
     private fun ensureInit() {
         if (inited) return
+        // Passo 1: carregar a biblioteca nativa (dlopen) — separado pra diagnosticar.
+        CrashLog.stage(ctx, "voz: carregando a lib nativa (dlopen)")
+        try {
+            System.loadLibrary("sherpa-onnx-jni")
+        } catch (e: Throwable) {
+            CrashLog.stage(ctx, "voz: FALHA ao carregar a lib (Java): ${e.javaClass.simpleName}")
+            throw e
+        }
+        CrashLog.stage(ctx, "voz: lib carregada OK; criando sessao")
+        // Passo 2: criar as sessões onnx (VAD/ASR/KWS).
         initModels()
         inited = true
         CrashLog.stage(ctx, "voz: modelos carregados OK")
@@ -116,7 +126,7 @@ class VoiceEngine(
     private fun initModels() {
         val feat = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80)
 
-        CrashLog.stage(ctx, "voz: carregando VAD (1o uso da lib nativa)")
+        CrashLog.stage(ctx, "voz: criando sessao VAD (onnx)")
         // Detecção de fala (quando a pessoa começa/para de falar).
         vad = Vad(
             assetManager = null,
