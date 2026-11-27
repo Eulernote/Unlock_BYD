@@ -54,15 +54,15 @@ object BydUnlock {
         return result
     }
 
-    private fun accWhitelist(c: Context, pkg: String): String = try {
+    private fun accWhitelist(c: Context, pkg: String): String { return try {
         val svc = BypassCtx(c).getSystemService("accmodemanager") ?: return "serviço não existe"
         val f = svc.javaClass.getDeclaredField("mService"); f.isAccessible = true
         val inner = f.get(svc) ?: return "mService nulo"
         val m = inner.javaClass.getDeclaredMethod("setPkg2AccWhiteList", String::class.java); m.isAccessible = true
         "OK (" + m.invoke(inner, pkg) + ")"
-    } catch (t: Throwable) { err(t) }
+    } catch (t: Throwable) { err(t) } }
 
-    private fun datacache(c: Context, pkg: String): String = try {
+    private fun datacache(c: Context, pkg: String): String { return try {
         val bc = BypassCtx(c)
         val uid = bc.packageManager.getApplicationInfo(pkg, 0).uid
         if (Build.VERSION.SDK_INT >= 31) {
@@ -72,7 +72,7 @@ object BydUnlock {
             val s = bc.getSystemService("bg_datacache") ?: return "bg_datacache não existe"
             "OK (" + s.javaClass.getMethod("setAppOpsData", String::class.java, Int::class.javaPrimitiveType).invoke(s, uid.toString(), 0) + ")"
         }
-    } catch (t: Throwable) { err(t) }
+    } catch (t: Throwable) { err(t) } }
 
     /** Teste: a trava de ACC pedida pelo PRÓPRIO app (depois da lista branca), segura enquanto o app viver. */
     fun appAccLock(): String {
