@@ -12,7 +12,7 @@ object Telemetry {
     @Volatile var lastErr = ""
     private fun device(ctx: Context, cls: String): Pair<Class<*>, Any>? = try {
         val c = Class.forName(cls)
-        val d = c.getMethod("getInstance", Context::class.java).invoke(null, ctx.applicationContext)
+        val d = c.getMethod("getInstance", Context::class.java).invoke(null, BydUnlock.BypassCtx(ctx.applicationContext))
         if (d != null) c to d else { lastErr = cls.substringAfterLast('.') + ": null"; null }
     } catch (t: Throwable) { val e = t.cause ?: t; lastErr = cls.substringAfterLast('.') + ": " + e.javaClass.simpleName + " " + (e.message ?: "").take(120); null }
 

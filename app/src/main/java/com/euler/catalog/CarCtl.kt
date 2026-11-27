@@ -25,7 +25,7 @@ object CarCtl {
     /** Executa no próprio processo do app (ar, temperatura, ventilação, janelas, estado, métodos). */
     fun local(ctx: Context, args: String): String {
         val p = args.trim().split(Regex("\\s+"))
-        return try { exec(ctx, p.firstOrNull() ?: "help", p.drop(1)) } catch (t: Throwable) { val c = t.cause ?: t; "ERRO ${c.javaClass.simpleName}: ${c.message}" }
+        return try { exec(BydUnlock.BypassCtx(ctx.applicationContext), p.firstOrNull() ?: "help", p.drop(1)) } catch (t: Throwable) { val c = t.cause ?: t; "ERRO ${c.javaClass.simpleName}: ${c.message}" }
     }
 
     private val FRAME = byteArrayOf(28, 2, 20, 0, -2, 20, 46, -126, 92, -15, 120, 80, 68, -94, -71, -54, 21, -93, -18, -68, -44, 123, 22, 0, 0, 0)

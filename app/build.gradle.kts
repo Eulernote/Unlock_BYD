@@ -6,6 +6,7 @@ plugins {
 android {
     namespace = "com.euler.catalog"
     compileSdk = 34
+    lint { disable += "ExpiredTargetSdkVersion"; checkReleaseBuilds = false; abortOnError = false }
 
     signingConfigs {
         getByName("debug") {
@@ -19,9 +20,11 @@ android {
     defaultConfig {
         applicationId = "com.euler.catalog"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 77
-        versionName = "8.4"
+        // targetSdk 25 (v78): igual ao Electro e ao Overdrive — o firmware BYD só entrega as permissões
+        // internas (ACC, bateria, ar) para apps nesse modo. Teste no Dolphin GS.
+        targetSdk = 25
+        versionCode = 78
+        versionName = "8.5"
         // WebRTC (câmeras ao vivo) traz bibliotecas nativas: só ARM (as multimídias são ARM), APK menor.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }

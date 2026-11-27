@@ -13,7 +13,18 @@ import android.os.Build
  * Feitas com o contexto do sistema (ActivityThread.systemMain) e com as APIs escondidas liberadas.
  */
 object BydUnlock {
-    private class BypassCtx(base: Context) : ContextWrapper(base)
+    /** Contexto que responde "permitido" para checagens de permissão feitas do lado do app. */
+    class BypassCtx(base: Context) : ContextWrapper(base) {
+        private val G = android.content.pm.PackageManager.PERMISSION_GRANTED
+        override fun checkPermission(permission: String, pid: Int, uid: Int) = G
+        override fun checkCallingPermission(permission: String) = G
+        override fun checkCallingOrSelfPermission(permission: String) = G
+        override fun checkSelfPermission(permission: String) = G
+        override fun enforcePermission(permission: String, pid: Int, uid: Int, message: String?) {}
+        override fun enforceCallingPermission(permission: String, message: String?) {}
+        override fun enforceCallingOrSelfPermission(permission: String, message: String?) {}
+        override fun getApplicationContext(): Context = this
+    }
 
     @Volatile var lastLog = ""
     @Volatile private var appLockToken: Binder? = null
@@ -43,6 +54,7 @@ object BydUnlock {
         var result: Context? = null
         val th = Thread {
             try {
+                if (android.os.Looper.myLooper() == null) android.os.Looper.prepare()
                 val at = Class.forName("android.app.ActivityThread")
                 val main = at.getMethod("systemMain").invoke(null)
                 val sys = at.getMethod("getSystemContext").invoke(main) as Context
