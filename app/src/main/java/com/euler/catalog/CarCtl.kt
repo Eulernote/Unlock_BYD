@@ -125,6 +125,7 @@ object CarCtl {
             val ms = o.javaClass.methods.filter { it.parameterTypes.isEmpty() && it.name.startsWith("get") && Regex("(?i)volt|batter|power|elec|soc|acc").containsMatchIn(it.name) }
             out.append("$k: ").append(ms.sortedBy { it.name }.joinToString(" ") { m -> m.name.removePrefix("get") + "=" + (try { m.invoke(o) } catch (t: Throwable) { "x" }) }).append("\n")
         }
+        out.append("12V (OTA, como o Sentry): ").append(try { Telemetry.v12Ota(ctx)?.let { "${it.first} V (${it.second})" } ?: "sem leitura (${Telemetry.lastErr})" } catch (t: Throwable) { t.javaClass.simpleName }).append("\n")
         try {
             val st = Class.forName("android.os.IAccModeManager\$Stub")
             out.append("ACC: ").append(st.declaredFields.filter { it.name.startsWith("TRANSACTION_") }.joinToString(" ") { f -> f.isAccessible = true; f.name.removePrefix("TRANSACTION_") + "=" + f.getInt(null) }).append("\n")
