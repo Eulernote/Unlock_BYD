@@ -52,6 +52,13 @@ class MonitorService : Service() {
     @Volatile private var lastPong = 0L
     @Volatile private var lastGrant = 0L
     private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var beat = 0
+    private var scrRx: android.content.BroadcastReceiver? = null
+    private fun netName(): String = try {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+        val n = cm.activeNetwork; val c = n?.let { cm.getNetworkCapabilities(it) }
+        when { c == null -> "nenhuma"; c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"; c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "dados"; c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> "vpn"; else -> "outra" }
+    } catch (_: Exception) { "?" }
 
     /** Vigia (v81, método do Electro): a cada 20 s pede ao módulo de energia para não desligar a multimídia. */
     private val wakeTick = object : Runnable {
@@ -61,8 +68,10 @@ class MonitorService : Service() {
                 try { if (wakeLock?.isHeld != true) wakeLock?.acquire() } catch (_: Exception) {}
                 Thread {
                     val r = try { CarCtl.local(applicationContext, "wake") } catch (e: Exception) { "erro ${e.message}" }
+                    if (r.substringBefore(" ·") != Vigia.wakeLast.substringBefore(" ·")) VLog.add(applicationContext, "wake: $r")
                     Vigia.wakeLast = r; Vigia.wakeOk = r.startsWith("wakeUpMcu()=")
                 }.start()
+                if (++beat % 3 == 0) VLog.add(applicationContext, "vivo · rede=${netName()} · hub=" + (if (connected) "ok" else "fora"))
             } else {
                 Vigia.wakeOk = false
                 try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
@@ -80,6 +89,18 @@ class MonitorService : Service() {
         super.onCreate()
         startForegroundSafe()
         running = true
+        VLog.add(this, "serviço iniciado (v${try { packageManager.getPackageInfo(packageName, 0).versionCode } catch (_: Exception) { 0 }}) · rede=${netName()}")
+        try {
+            val rx = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context, i: Intent) { VLog.add(c, "sistema: " + (i.action ?: "?").substringAfterLast('.') + " · rede=${netName()}") }
+            }
+            val f = android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON); addAction(Intent.ACTION_SHUTDOWN)
+                addAction("android.intent.action.ACC_OFF"); addAction("android.intent.action.ACC_ON")
+                addAction("com.byd.action.ACC_OFF"); addAction("com.byd.action.ACC_ON"); addAction("android.intent.action.ACTION_ACC_OFF"); addAction("android.intent.action.ACTION_ACC_ON")
+            }
+            registerReceiver(rx, f); scrRx = rx
+        } catch (_: Exception) {}
         connect()
         ui.postDelayed(pinger, 30_000)
         ui.postDelayed(teleTick, 5_000)
@@ -99,7 +120,9 @@ class MonitorService : Service() {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
             val cb = object : android.net.ConnectivityManager.NetworkCallback() {
                 private var first = true
+                override fun onLost(network: android.net.Network) { VLog.add(applicationContext, "rede perdida") }
                 override fun onAvailable(network: android.net.Network) {
+                    VLog.add(applicationContext, "rede disponível: ${netName()}")
                     if (first) { first = false; return }
                     ui.post { reconnectNow("rede mudou") }
                 }
@@ -116,6 +139,8 @@ class MonitorService : Service() {
 
     override fun onDestroy() {
         running = false
+        VLog.add(this, "serviço encerrado")
+        try { scrRx?.let { unregisterReceiver(it) } } catch (_: Exception) {}
         ui.removeCallbacksAndMessages(null)
         try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         try { netCb?.let { (getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager).unregisterNetworkCallback(it) } } catch (_: Exception) {}
@@ -165,6 +190,7 @@ class MonitorService : Service() {
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 connected = true; backoff = 5_000L; lastPong = System.currentTimeMillis()
+                VLog.add(applicationContext, "hub conectado · rede=${netName()}")
                 ui.post { ui.removeCallbacks(teleTick); ui.postDelayed(teleTick, 3_000) }
                 Log.i(TAG, "conectado ao hub")
             }
@@ -223,6 +249,7 @@ class MonitorService : Service() {
     private fun dropped(w: WebSocket, why: String) {
         if (w !== ws) return
         Log.w(TAG, "hub: $why")
+        VLog.add(applicationContext, "hub caiu: ${why.take(80)} · rede=${netName()}")
         connected = false; ws = null
         LiveCam.stopAll()
         if (!running) return
