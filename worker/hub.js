@@ -49,6 +49,8 @@ export async function iceServers(env){
 
 function send(ws, obj){ try{ ws.send(JSON.stringify(obj)); }catch(e){} }
 
+import { notifyCar } from './push.js';
+
 export class CarHub {
   constructor(ctx, env){
     this.ctx = ctx; this.env = env;
@@ -66,8 +68,31 @@ export class CarHub {
     if(typeof m.ts === 'number' && m.ts > now - 31 * 86400000 && m.ts <= now + 60000) now = Math.round(m.ts);
     this.sql().exec('INSERT OR REPLACE INTO tele(ts, soc, v12, lvl, sys) VALUES (?, ?, ?, ?, ?)', now, soc, v12, num(m.v12lvl), num(m.sys));
     if(typeof m.vig === 'string') this.ctx.storage.put('vig', {s: m.vig.slice(0, 20), ts: now});
+    this.ctx.waitUntil(this.alerts(v12, typeof m.vig === 'string' ? m.vig : '', soc).catch(() => {}));
     if(Math.random() < 0.02) this.sql().exec('DELETE FROM tele WHERE ts < ?', now - 30 * 86400000);
   }
+  // Notificações no celular do cliente: 12V baixa (≤ 12,7 V) e modo guardião desligado por segurança.
+  async alerts(v12, vig, soc){
+    const st = (await this.ctx.storage.get('alert')) || {warn: false, cut: false};
+    let msg = null;
+    const fmt = (x, d) => Number(x).toLocaleString('pt-BR', {minimumFractionDigits: d, maximumFractionDigits: d});
+    if(v12 != null){
+      if(v12 <= 12.7 && !st.warn){ st.warn = true; msg = ['🔋 Bateria 12V baixa', 'A bateria 12V está em ' + fmt(v12, 1) + ' V. Se ficar abaixo de 12,6 V por 10 minutos, o modo guardião desliga sozinho para proteger o carro.', 'v12']; }
+      else if(v12 >= 12.9 && st.warn) st.warn = false;
+    }
+    if(vig.indexOf('cut_') === 0 && !st.cut){
+      st.cut = true;
+      msg = vig === 'cut_soc'
+        ? ['🛡 Modo guardião desligado', 'Por segurança, o modo guardião foi desligado: a bateria de tração está abaixo de 5%' + (soc != null ? ' (' + fmt(soc, 1) + '%)' : '') + '. As câmeras voltam quando o carro for carregado.', 'cut']
+        : ['🛡 Modo guardião desligado', 'Por segurança, o modo guardião foi desligado: a bateria 12V ficou abaixo de 12,6 V' + (v12 != null ? ' (' + fmt(v12, 1) + ' V)' : '') + '. Ela é a bateria que liga o carro. As câmeras voltam quando o carro for ligado.', 'cut'];
+    } else if(vig === 'on' && st.cut) st.cut = false;
+    await this.ctx.storage.put('alert', st);
+    if(!msg) return;
+    const id = await this.ctx.storage.get('carId'); if(!id) return;
+    const car = await this.env.KV.get('car:' + id, {type: 'json'});
+    await notifyCar(this.env, id, msg[0] + (car && car.nome ? ' — ' + car.nome : ''), msg[1], msg[2]);
+  }
+
   lastTele(){ try{ const r = this.sql().exec('SELECT ts, soc, v12 FROM tele ORDER BY ts DESC LIMIT 1').toArray(); return r[0] || null; }catch(e){ return null; } }
 
   cars(except){ return this.ctx.getWebSockets('car').filter(w => w !== except); }
@@ -106,6 +131,7 @@ export class CarHub {
       for(const old of this.cars()){ try{ old.serializeAttachment({replaced: true}); old.close(4000, 'replaced'); }catch(e){} }
       this.ctx.acceptWebSocket(server, ['car']);
       server.serializeAttachment({role: 'car', at: Date.now()});
+      try{ const cid = new URL(request.url).searchParams.get('id'); if(cid) this.ctx.storage.put('carId', cid); }catch(e){}
       for(const v of this.viewers()) send(v, {t: 'online'});
     } else if(role === 'viewer'){
       if(this.viewers().length >= MAX_VIEWERS) return new Response('muitos celulares assistindo', {status: 429});

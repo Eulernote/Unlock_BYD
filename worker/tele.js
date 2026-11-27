@@ -15,11 +15,11 @@ function hm(ts){var d=new Date(ts);return ('0'+d.getHours()).slice(-2)+':'+('0'+
 function dm(ts){var d=new Date(ts);return ('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2);}
 function dur(ms){var m=Math.round(ms/60000);if(m<60)return m+' min';var h=Math.floor(m/60),r=m%60;if(h<24)return h+' h'+(r?(' '+r+' min'):'');var dd=Math.floor(h/24);return dd+' d '+(h%24)+' h';}
 function ago(ts){return 'há '+dur(Date.now()-ts);}
-// Avisos de proteção da bateria (mesmos limites do app do carro: aviso 12,8 V · corte 12,6 V por 10 min · tração 5%)
+// Avisos de proteção da bateria (aviso 12,7 V · corte 12,6 V por 10 min · tração 5%)
 window.teleAlert=function(last,vig){last=last||{};var box=function(c,t,d){return '<div style="margin:8px 0;padding:10px 12px;border-radius:10px;border:1px solid '+c+';background:'+c+'1f;font-size:12.5px;line-height:1.45"><b>'+t+'</b><br>'+d+'</div>';};
  if(vig==='cut_soc'||(last.soc!=null&&last.soc<5))return box('#ef5350','🛡 Monitoramento pausado: bateria de tração abaixo de 5%','Com a tração muito baixa, o carro deixa de recarregar a bateria 12V, que é a que faz o carro ligar. Para proteger o veículo, a multimídia foi desligada e as câmeras ficam indisponíveis até o carro ser carregado.');
  if(vig==='cut_v12')return box('#ef5350','🛡 Monitoramento pausado para proteger a bateria 12V','A bateria 12V ficou abaixo de 12,6 V'+(last.v12!=null?' (última leitura '+n(last.v12,2)+' V)':'')+'. É ela que liga o carro: se descarregar demais, o carro pode não ligar. Por segurança, a multimídia foi desligada e as câmeras voltam quando o carro for ligado.');
- if(last.v12!=null&&last.v12<12.8)return box('#f2c25b','⚠ Bateria 12V baixa ('+n(last.v12,2)+' V)','Se ficar abaixo de 12,6 V por 10 minutos, o monitoramento pausa sozinho para proteger a bateria que liga o carro.');
+ if(last.v12!=null&&last.v12<=12.7)return box('#f2c25b','⚠ Bateria 12V baixa ('+n(last.v12,2)+' V)','Se ficar abaixo de 12,6 V por 10 minutos, o monitoramento pausa sozinho para proteger a bateria que liga o carro.');
  return '';};
 var VIGN={on:'ativa (multimídia acordada)',noadb:'sem ADB — não consegue manter a multimídia acordada',fail:'falhou ao iniciar',notele:'sem leitura de bateria — desligada por segurança',cut_v12:'pausada (12V baixa)',cut_soc:'pausada (tração < 5%)',off:'desligada'};
 var K={soc:{name:'Bateria de tração',unit:'%',d:1,color:'#2bb0a6'},v12:{name:'Bateria 12V',unit:' V',d:2,color:'#f2c25b'}};

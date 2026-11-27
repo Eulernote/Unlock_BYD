@@ -12,6 +12,7 @@
 // ============================================================================
 import { ICON_180, ICON_192, ICON_512 } from './cliente-icons.js';
 import { TELE_UI_JS } from './tele.js';
+import { vapidPublic, addSub, takePending, notifyUser } from './push.js';
 export { CarHub } from './hub.js';
 
 const CLIENT_TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 30;  // 30 dias: cara de app, sem pedir senha toda hora
@@ -277,6 +278,13 @@ export async function handleClient(request, env, p, H){
     return H.json({token: await makeClientToken(H, env.SECRET, user), user: user});
   }
 
+  // --- notificações: chave pública e mensagens pendentes (o service worker busca sem login, pela chave do endpoint) ---
+  if(p === '/c/api/push-key' && request.method === 'GET') return H.json({key: await vapidPublic(env)});
+  if(p === '/c/api/push-pending' && request.method === 'POST'){
+    const b = await request.json().catch(() => ({}));
+    return H.json({msgs: await takePending(env, b.endpoint)});
+  }
+
   const user = await clientUser(H, env, request);
   if(!user) return H.json({error:'unauth'}, 401);
   const cli = await getCli(env, user);
@@ -293,6 +301,13 @@ export async function handleClient(request, env, p, H){
       cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, controls: !!m.ctl, seen: seen || c.seen || 0, online: online, bat: bat});
     }
     return H.json({user:user, cars:cars});
+  }
+
+  if(p === '/c/api/push-sub' && request.method === 'POST'){
+    const b = await request.json().catch(() => ({}));
+    if(!(await addSub(env, user, b.sub))) return H.json({error:'inscrição inválida'}, 400);
+    await notifyUser(env, user, '🔔 Notificações ativadas', 'Você vai receber aqui os avisos de bateria 12V baixa e do modo guardião.', 'hello');
+    return H.json({ok:true});
   }
 
   if(p === '/c/api/tele' && request.method === 'GET'){
@@ -340,10 +355,20 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-13';
+const V = 'ubyd-c-14';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('push', e => {
+  e.waitUntil(self.registration.pushManager.getSubscription().then(s => s ? fetch('/c/api/push-pending', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({endpoint: s.endpoint})}).then(r => r.json()) : {msgs: []})
+    .catch(() => ({msgs: []}))
+    .then(d => { const ms = (d && d.msgs) || []; if(!ms.length) ms.push({title: 'Unlock BYD', body: 'Novo aviso do seu carro. Toque para abrir.', tag: 'ubyd'});
+      return Promise.all(ms.map(m => self.registration.showNotification(m.title, {body: m.body, tag: m.tag + '-' + (m.ts || Date.now()), icon: '/c/icon-192.png', badge: '/c/icon-192.png', data: {url: '/c/'}}))); }));
+});
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({type: 'window', includeUncontrolled: true}).then(ws => { for(const w of ws){ if('focus' in w) return w.focus(); } return self.clients.openWindow('/c/'); }));
+});
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url);
   if (e.request.method !== 'GET' || u.pathname.indexOf('/c/api/') === 0) return;
@@ -463,6 +488,7 @@ select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-ra
 
 <!-- HOME -->
 <div id="v-home" class="hide">
+  <div class="card hide" id="pushcard" style="display:flex;align-items:center;gap:12px"><div style="flex:1"><b>🔔 Avisos no celular</b><div class="dot" id="pushtxt">Receba aviso de bateria 12V baixa e do modo guardião.</div></div><button class="btn btn-p" style="width:auto;padding:10px 14px;margin:0" id="pushbtn" onclick="enablePush()">Ativar</button></div>
   <div id="cars"></div>
   <button class="btn btn-g" onclick="show('pair')">+ Vincular outro carro</button>
   <button class="link" onclick="logout()">Sair</button>
@@ -473,7 +499,7 @@ select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-ra
 var T=null,U=null,CARS=[];var DIAG=/[?&]diag=1/.test(location.search);try{T=localStorage.getItem('ubyd_c_token');U=localStorage.getItem('ubyd_c_user');}catch(e){}
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function show(v){['login','pair','home','forgot'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home')loadMe();}
+function show(v){['login','pair','home','forgot'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home'){loadMe();pushState();}}
 function save(t,u){T=t;U=u;try{localStorage.setItem('ubyd_c_token',t);localStorage.setItem('ubyd_c_user',u);}catch(e){}}
 function logout(){T=null;U=null;try{localStorage.removeItem('ubyd_c_token');localStorage.removeItem('ubyd_c_user');}catch(e){}show('login');}
 function api(path,body){return fetch(path,{method:body?'POST':'GET',headers:Object.assign({'Content-Type':'application/json'},T?{'Authorization':'Bearer '+T}:{}),body:body?JSON.stringify(body):undefined})
@@ -512,6 +538,22 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
   }).join('');
  }).catch(function(x){$('cars').innerHTML='<div class="card"><div class="err">'+esc(x.message)+'</div><button class="btn btn-g" onclick="loadMe()">Tentar de novo</button></div>';});}
 function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste login?'))return;api('/c/api/unlink',{car:c.id}).then(loadMe).catch(function(x){alert(x.message);});}
+
+/* notificações */
+function b64uToU8(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';var r=atob(s),a=new Uint8Array(r.length);for(var i=0;i<r.length;i++)a[i]=r.charCodeAt(i);return a;}
+function pushState(){var c=$('pushcard');if(!c)return;if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){c.classList.add('hide');return;}
+ c.classList.remove('hide');
+ navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription();}).then(function(s){
+  if(s&&Notification.permission==='granted'){$('pushtxt').textContent='Ativado neste celular ✓ (12V baixa e modo guardião).';$('pushbtn').textContent='Testar';}
+  else if(Notification.permission==='denied'){$('pushtxt').textContent='As notificações estão bloqueadas para este site. Libere nas configurações do navegador.';}
+ }).catch(function(){});}
+function enablePush(){var b=$('pushbtn');b.disabled=true;
+ Notification.requestPermission().then(function(p){if(p!=='granted')throw new Error('Permissão negada');return Promise.all([navigator.serviceWorker.ready,api('/c/api/push-key')]);})
+ .then(function(x){return x[0].pushManager.getSubscription().then(function(s){return s||x[0].pushManager.subscribe({userVisibleOnly:true,applicationServerKey:b64uToU8(x[1].key)});});})
+ .then(function(sub){return api('/c/api/push-sub',{sub:sub.toJSON()});})
+ .then(function(){$('pushtxt').textContent='Ativado neste celular ✓ — mandamos uma notificação de teste.';$('pushbtn').textContent='Testar';})
+ .catch(function(e){$('pushtxt').textContent='Não consegui ativar: '+(e&&e.message||e)+(/iPhone|iPad/.test(navigator.userAgent)?' (no iPhone, adicione o app à Tela de Início antes)':'');})
+ .then(function(){b.disabled=false;});}
 
 /* controles do carro */
 var CTL={};
