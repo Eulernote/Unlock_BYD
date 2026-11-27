@@ -194,11 +194,11 @@ object LiveCam {
             audioIdx = (loadAudioIdx(ctx) + 1) % AUDIO_CFGS.size
             saveAudioIdx(ctx)
             Log.i(TAG, "mic: testando combinação $audioIdx (motivo: $reason)")
-            p?.send(JSONObject().put("t", "micretry").put("v", v))
+            p?.send?.invoke(JSONObject().put("t", "micretry").put("v", v))
             main.postDelayed({ exec.execute { try { rebuildFactoryForAudio(ctx) } catch (_: Throwable) {} } }, 300)
         } else {
             micAttempts = 0
-            p?.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", "não consegui o microfone neste carro ($reason)"))
+            p?.send?.invoke(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", "não consegui o microfone neste carro ($reason)"))
         }
     }
 
