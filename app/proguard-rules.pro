@@ -59,3 +59,5 @@
 # Controles do carro: roda via app_process pelo nome da classe. NAO ofuscar.
 -keep class com.euler.catalog.CarCtl { *; }
 
+
+-keep class com.euler.catalog.MicShell { *; }

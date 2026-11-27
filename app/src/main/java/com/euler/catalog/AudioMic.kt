@@ -93,7 +93,23 @@ object AudioMic {
                 return "ok (fonte $src @ $rate Hz)"
             }
         }
-        return diag
+        return diag + diagExtra(ctx)
+    }
+
+    /** Diagnóstico extra quando a captura no app falha: AppOps do microfone e teste de captura pelo shell. */
+    private fun diagExtra(ctx: Context): String {
+        val sb = StringBuilder()
+        try {
+            val ops = AdbShell.run(ctx, "cmd appops get ${ctx.packageName} RECORD_AUDIO 2>/dev/null | head -1", 8000).output.trim()
+            if (ops.isNotBlank()) sb.append(" · AppOps: ").append(ops.take(60))
+        } catch (_: Throwable) {}
+        try {
+            val apk = ctx.applicationInfo.sourceDir
+            AdbShell.run(ctx, "pkill -f com.euler.catalog.MicShell 2>/dev/null; CLASSPATH=$apk app_process /system/bin com.euler.catalog.MicShell diag >/dev/null 2>&1; echo ok", 20000)
+            val r = AdbShell.run(ctx, "grep RESULTADO /data/local/tmp/ubyd_mic.log 2>/dev/null | tail -1", 8000).output.trim()
+            if (r.isNotBlank()) sb.append(" · Shell: ").append(r.removePrefix("RESULTADO: "))
+        } catch (_: Throwable) {}
+        return sb.toString()
     }
 
     private fun sendDown(dc: DataChannel, data: ByteArray, len: Int, down: Int): Boolean {
