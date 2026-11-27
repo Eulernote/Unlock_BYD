@@ -61,6 +61,8 @@
         <activity
             android:name=".assistant.AssistantTestActivity"
             android:label="Hey Up (teste)"
+            android:taskAffinity="com.euler.catalog.heyup"
+            android:launchMode="singleTask"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
