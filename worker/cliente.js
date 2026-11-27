@@ -340,7 +340,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-12';
+const V = 'ubyd-c-13';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -498,7 +498,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
    var can=c.active&&c.monitor,cc=c.active&&c.controls;
    return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
-    (c.bat?teleAlert(c.bat,c.bat.vig):'')+(c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b> &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b> <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
+    (c.bat?teleAlert(c.bat,c.bat.vig):'')+(c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b>'+(c.bat.v12!=null?' &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b>':'')+' <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
     (cc?ctlPanel(i):'')+
     ((can||cc)?'<button class="link" style="padding-top:8px;text-align:left" onclick="toggleBat('+i+')">📈 Bateria e consumo</button><div id="bat-'+i+'" class="hide" style="margin-top:6px"></div>':'')+
     (can?('<div class="live" id="live-'+i+'"><video id="vid-'+i+'" playsinline muted autoplay onclick="openFull('+i+')"></video><canvas id="cv-'+i+'" onclick="openFull('+i+')"></canvas><div class="fsbar" id="fsb-'+i+'"></div><button class="fsbtn" onclick="openFull('+i+')">⛶</button><div class="ov" id="ov-'+i+'">📷 Toque em “Ver ao vivo”</div></div>'+
@@ -517,7 +517,7 @@ function unlink(i){var c=CARS[i];if(!c||!confirm('Desvincular '+c.nome+' deste l
 var CTL={};
 function ctlPanel(i){var s=CTL[i]||(CTL[i]={temp:22,fan:3});var b=function(cmd,n,t,cls){return '<button class="cb'+(cls?' '+cls:'')+'" onclick="ctl('+i+',\\''+cmd+'\\','+(n==null?'null':n)+')">'+t+'</button>';};
  return '<div class="ctl"><div class="ctlh">🎛 Controles</div>'+
-  '<div class="cg">'+b('ac_on',null,'🚗 Ligar o carro','cp')+b('ac_off',null,'⏻ Desligar')+'</div>'+
+  '<div class="cg">'+b('ac_on',null,'🚗 Ligar o carro','cp')+b('ac_off',null,'⏹ Desligar')+'</div>'+
   '<div class="cr"><span>🌡 Temperatura</span><span class="st">'+b('temp',-1,'−')+'<b id="ct-'+i+'">'+s.temp+' °C</b>'+b('temp',1,'+')+'</span></div>'+
   '<div class="cr"><span>🌀 Ventilação</span><span class="st">'+b('fan',-1,'−')+'<b id="cf-'+i+'">'+s.fan+'</b>'+b('fan',1,'+')+'</span></div>'+
   '<div class="cg">'+b('lock',null,'🔒 Trancar')+b('unlock',null,'🔓 Destrancar')+'</div>'+

@@ -53,10 +53,11 @@ function changes(rows,k,h){
 window.teleWidget=function(el,load,opt){opt=opt||{};
  var st={k:'soc',h:24,data:null,err:''};
  function draw(){var d=st.data,last=(d&&d.last)||{};
-  var html='<div class="tw"><div class="tw-now"><div><span class="tw-l">Bateria de tração</span><b>'+n(last.soc,1)+'%</b></div><div><span class="tw-l">Bateria 12V</span><b>'+n(last.v12,2)+' V</b></div><div class="tw-muted">'+(last.ts?('atualizado '+ago(last.ts)):(st.err||'sem dados ainda'))+'</div></div>';
+  var html='<div class="tw"><div class="tw-now"><div><span class="tw-l">Bateria de tração</span><b>'+n(last.soc,1)+'%</b></div>'+(last.v12!=null||!last.ts?'<div><span class="tw-l">Bateria 12V</span><b>'+n(last.v12,2)+' V</b></div>':'')+'<div class="tw-muted">'+(last.ts?('atualizado '+ago(last.ts)):(st.err||'sem dados ainda'))+'</div></div>';
   if(!opt.noAlert)html+=window.teleAlert(last,d&&d.vig&&d.vig.s);
   if(opt.admin&&d&&d.vig)html+='<div class="tw-muted" style="margin:-2px 0 6px">Vigia: '+(VIGN[d.vig.s]||d.vig.s)+' · '+ago(d.vig.ts)+'</div>';
-  html+='<div class="tw-row">'+[['soc','Tração (%)'],['v12','12V (V)']].map(function(t){return '<button class="tw-b'+(st.k===t[0]?' on':'')+'" data-k="'+t[0]+'">'+t[1]+'</button>';}).join('')+'<span style="flex:1"></span>'+
+  var hasV=(d&&d.rows||[]).some(function(r){return r.v12!=null;});if(!hasV)st.k='soc';
+  html+='<div class="tw-row">'+[['soc','Tração (%)']].concat(hasV?[['v12','12V (V)']]:[]).map(function(t){return '<button class="tw-b'+(st.k===t[0]?' on':'')+'" data-k="'+t[0]+'">'+t[1]+'</button>';}).join('')+'<span style="flex:1"></span>'+
    [[6,'6 h'],[24,'24 h'],[168,'7 dias']].map(function(r){return '<button class="tw-b'+(st.h===r[0]?' on':'')+'" data-h="'+r[0]+'">'+r[1]+'</button>';}).join('')+'</div>';
   var rows=(d&&d.rows)||[];
   html+=d?chart(rows,st.k,st.h)+summary(rows,st.k,st.h)+changes(rows,st.k,st.h):'<div class="tw-muted" style="padding:14px 0">Carregando…</div>';
