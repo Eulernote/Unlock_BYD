@@ -4,9 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
-import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
@@ -15,12 +15,12 @@ import android.widget.ScrollView
 import android.widget.TextView
 
 /**
- * Tela de teste do assistente. Dois modos no mesmo lugar:
- *  - TEXTO: digita o comando e executa (valida controle do carro sem voz).
- *  - VOZ: "Falar agora" (push-to-talk) e "Ativar voz" (modo ambiente, escuta "Hey Up").
+ * Tela de teste do assistente.
  *
- * A resposta é falada pela voz nativa pt-BR (Razo entra depois). Os modelos de ouvir
- * são baixados do R2 na 1ª vez que a voz é usada.
+ * Importante: nesta multimídia, criar um EditText pode crashar (o Android tenta ler
+ * DeviceConfig/TextClassifier e o provedor do sistema falha com RemoteException). Por isso
+ * o teste por texto usa BOTÕES de comando prontos (não disparam esse bug). O campo de
+ * digitar livre é opcional e criado de forma blindada; se falhar, a tela segue funcionando.
  *
  * Abrir pelo ícone "Hey Up (teste)" ou por ADB:
  *   am start -n com.euler.catalog/com.euler.catalog.assistant.AssistantTestActivity
@@ -29,88 +29,117 @@ class AssistantTestActivity : Activity() {
 
     private lateinit var exec: AssistantExecutor
     private lateinit var saida: TextView
+    private var entrada: EditText? = null
     private var speaker: Speaker? = null
     private var engine: VoiceEngine? = null
     private var ambient = false
 
+    private val presets = listOf(
+        "fecha os vidros", "abre os vidros",
+        "liga o ar", "desliga o ar",
+        "ar no 3", "temperatura 22",
+        "liga o carro", "desliga o carro",
+        "abre o YouTube", "toca Zeze di Camargo no Spotify",
+        "abre o Waze pro Passeio das Aguas", "abre o radio",
+        "abre as configuracoes", "abre o WhatsApp"
+    )
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        CrashLog.install(applicationContext) // grava crashes pra aparecerem na tela
+        CrashLog.install(applicationContext)
         exec = AssistantExecutor(this)
         speaker = Speaker(this)
-        AppCatalog.init() // carrega o catálogo real da loja (nomes + pacotes) em segundo plano
-        val pad = (16 * resources.displayMetrics.density).toInt()
+        AppCatalog.init()
 
-        val root = LinearLayout(this).apply {
+        val pad = (14 * resources.displayMetrics.density).toInt()
+        val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
-            setBackgroundColor(Color.parseColor("#0E0E0E"))
         }
 
-        val titulo = TextView(this).apply {
+        col.addView(TextView(this).apply {
             text = "Hey Up — teste"; setTextColor(Color.WHITE); textSize = 18f
-            setPadding(0, 0, 0, pad)
-        }
+            setPadding(0, 0, 0, pad / 2)
+        })
 
-        val entrada = EditText(this).apply {
-            hint = "ex.: fecha os vidros, ar no 3, liga o carro"
-            setHintTextColor(Color.parseColor("#888888")); setTextColor(Color.WHITE)
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-
-        val btnTexto = Button(this).apply {
-            text = "Executar (texto)"
-            setOnClickListener {
-                CrashLog.clear(this@AssistantTestActivity)
-                val frase = entrada.text.toString().trim()
-                if (frase.isEmpty()) { saida.text = "Escreva um comando primeiro."; return@setOnClickListener }
-                dispatch(frase)
+        // Campo de digitar livre — opcional e blindado (pode crashar nesta ROM).
+        try {
+            val e = EditText(this).apply {
+                hint = "ex.: fecha os vidros, ar no 3"
+                setHintTextColor(Color.parseColor("#888888")); setTextColor(Color.WHITE)
+                inputType = InputType.TYPE_CLASS_TEXT
             }
+            if (Build.VERSION.SDK_INT >= 26) try { e.setTextClassifier(android.view.textclassifier.TextClassifier.NO_OP) } catch (_: Throwable) {}
+            entrada = e
+            col.addView(e)
+            col.addView(Button(this).apply {
+                text = "Executar (texto digitado)"
+                setOnClickListener { safe {
+                    val f = entrada?.text?.toString()?.trim().orEmpty()
+                    if (f.isEmpty()) setStatus("Escreva um comando primeiro.") else dispatch(f)
+                } }
+            })
+        } catch (ex: Throwable) {
+            CrashLog.write(applicationContext, "EditText", ex)
+            col.addView(TextView(this).apply {
+                text = "(campo de digitar indisponivel neste carro — use os botoes abaixo)"
+                setTextColor(Color.parseColor("#E0A030")); textSize = 12f
+            })
         }
 
-        val linhaVoz = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, pad / 2, 0, 0)
+        // Botões de comando prontos (caminho de texto confiável — não usa EditText).
+        col.addView(TextView(this).apply {
+            text = "Comandos rapidos:"; setTextColor(Color.parseColor("#AAAAAA")); textSize = 13f
+            setPadding(0, pad, 0, 4)
+        })
+        var row: LinearLayout? = null
+        presets.forEachIndexed { i, cmd ->
+            if (i % 2 == 0) {
+                row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                col.addView(row)
+            }
+            row!!.addView(Button(this).apply {
+                text = cmd; textSize = 12f; isAllCaps = false
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener { safe { dispatch(cmd) } }
+            })
         }
-        val btnFalar = Button(this).apply {
-            text = "Falar agora"
+
+        // Voz
+        col.addView(TextView(this).apply {
+            text = "Voz:"; setTextColor(Color.parseColor("#AAAAAA")); textSize = 13f
+            setPadding(0, pad, 0, 4)
+        })
+        val voz = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        voz.addView(Button(this).apply {
+            text = "Falar agora"; isAllCaps = false
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { safe { ensureMic { comModelos { voiceEngine().captureOnce() } } } }
-        }
-        val btnAmbiente = Button(this).apply {
-            text = "Ativar voz (Hey Up)"
+        })
+        voz.addView(Button(this).apply {
+            text = "Ativar voz (Hey Up)"; isAllCaps = false
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener { safe {
                 if (ambient) {
-                    engine?.stop(); ambient = false; text = "Ativar voz (Hey Up)"
-                    setStatus("Voz ambiente desligada.")
-                } else {
-                    ensureMic { comModelos {
-                        voiceEngine().start(); ambient = true; text = "Desligar voz"
-                        setStatus("Ouvindo… diga \"Hey Up\" e o comando.")
-                    } }
-                }
+                    engine?.stop(); ambient = false; text = "Ativar voz (Hey Up)"; setStatus("Voz ambiente desligada.")
+                } else ensureMic { comModelos {
+                    voiceEngine().start(); ambient = true; text = "Desligar voz"
+                    setStatus("Ouvindo… diga \"Hey Up\" e o comando.")
+                } }
             } }
-        }
-        linhaVoz.addView(btnFalar); linhaVoz.addView(btnAmbiente)
+        })
+        col.addView(voz)
 
         saida = TextView(this).apply {
-            setTextColor(Color.parseColor("#CFCFCF")); textSize = 14f
+            setTextColor(Color.parseColor("#CFCFCF")); textSize = 13f
             setPadding(0, pad, 0, 0)
             val crash = CrashLog.readLast(this@AssistantTestActivity)
-            text = if (crash != null)
-                "⚠ ULTIMO ERRO (toque 'Executar texto' pra limpar):\n\n$crash"
-            else "Digite um comando e toque em Executar, ou use a voz.\n" +
-                "A 1ª vez que usar a voz, o app baixa os modelos do R2."
+            text = if (crash != null) "⚠ ULTIMO ERRO (toque um comando pra limpar):\n\n$crash"
+                   else "Toque um comando pronto, ou usa a voz."
         }
-        val scroll = ScrollView(this).apply {
-            addView(saida)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
+        col.addView(saida)
 
-        root.addView(titulo); root.addView(entrada); root.addView(btnTexto)
-        root.addView(linhaVoz); root.addView(scroll)
-        setContentView(root)
+        setContentView(ScrollView(this).apply { addView(col) })
     }
 
     private fun voiceEngine(): VoiceEngine {
@@ -125,18 +154,21 @@ class AssistantTestActivity : Activity() {
         return e
     }
 
-    /** interpreta -> mostra -> executa (fundo) -> fala a resposta. */
     private fun dispatch(frase: String) {
+        CrashLog.clear(applicationContext)
         val a = CommandParser.interpretar(frase)
         val detalhe = buildString {
             append("Comando: ").append(frase).append("\n")
             append("Tipo: ").append(a.type).append("  |  ").append(a.speak)
+            a.pkg?.let { append("\nPacote: ").append(it) }
             a.method?.let { append("\nMetodo: ").append(it).append(" ").append(a.args) }
             a.remoteCode?.let { append("\nCodigo: ").append(it) }
         }
         setStatus(detalhe + "\nExecutando…")
         Thread {
-            val falou = try { exec.execute(a) } catch (e: Throwable) { "Erro: ${e.message}" }
+            val falou = try { exec.execute(a) } catch (e: Throwable) {
+                CrashLog.write(applicationContext, "execute", e); "Erro: ${e.message}"
+            }
             runOnUiThread { setStatus(detalhe + "\n>> " + falou) }
             speaker?.speak(falou)
         }.start()
@@ -144,38 +176,31 @@ class AssistantTestActivity : Activity() {
 
     private fun setStatus(s: String) { saida.text = s }
 
-    /** Executa um bloco capturando qualquer erro (pra não fechar o app e registrar). */
     private fun safe(block: () -> Unit) {
         try { block() } catch (e: Throwable) {
             CrashLog.write(applicationContext, "UI", e)
-            setStatus("Erro: ${e.message}\n(${e.javaClass.simpleName})")
+            setStatus("Erro: ${e.message} (${e.javaClass.simpleName})")
         }
     }
 
-    // --- permissão de microfone ---
     private var pendingAfterMic: (() -> Unit)? = null
     private fun ensureMic(then: () -> Unit) {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            then()
-        } else {
-            pendingAfterMic = then
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1001)
-        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) then()
+        else { pendingAfterMic = then; requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1001) }
     }
 
     override fun onRequestPermissionsResult(rc: Int, p: Array<out String>, r: IntArray) {
         super.onRequestPermissionsResult(rc, p, r)
         if (rc == 1001) {
-            if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) pendingAfterMic?.invoke()
+            if (r.isNotEmpty() && r[0] == PackageManager.PERMISSION_GRANTED) safe { pendingAfterMic?.invoke() }
             else setStatus("Preciso da permissao de microfone pra usar a voz.")
             pendingAfterMic = null
         }
     }
 
-    /** garante os modelos baixados (fundo), depois roda o bloco. */
     private fun comModelos(then: () -> Unit) {
         if (VoiceModels.isReady(this)) { then(); return }
-        setStatus("Baixando modelos de voz do R2 (só na 1ª vez)…")
+        setStatus("Baixando modelos de voz do R2 (só na 1ª vez, ~100 MB)…")
         Thread {
             try {
                 val ok = VoiceModels.download(this) { msg -> runOnUiThread { setStatus(msg) } }
