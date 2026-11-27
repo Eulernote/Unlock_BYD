@@ -1,0 +1,40 @@
+{
+  "files": [
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/asr/decoder.onnx",
+      "path": "asr/decoder.onnx"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/asr/encoder.onnx",
+      "path": "asr/encoder.onnx"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/asr/tokens.txt",
+      "path": "asr/tokens.txt"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/kws/decoder.onnx",
+      "path": "kws/decoder.onnx"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/kws/encoder.onnx",
+      "path": "kws/encoder.onnx"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/kws/joiner.onnx",
+      "path": "kws/joiner.onnx"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/kws/keywords.txt",
+      "path": "kws/keywords.txt"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/kws/tokens.txt",
+      "path": "kws/tokens.txt"
+    },
+    {
+      "url": "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/vad/silero_vad.onnx",
+      "path": "vad/silero_vad.onnx"
+    }
+  ]
+}
