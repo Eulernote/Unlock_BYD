@@ -150,6 +150,7 @@ class MonitorService : Service() {
                     "cam" -> if (v.isNotEmpty()) LiveCam.switchCam(v, m.optString("cam", "auto"), m.optString("size", "auto"))
                     "answer" -> if (v.isNotEmpty()) LiveCam.answer(v, m.optString("sdp"))
                     "stop" -> if (v.isNotEmpty()) LiveCam.stop(v)
+                    "ctl" -> if (v.isNotEmpty()) runCtl(m.optString("cmd"), m.optInt("n", 0)) { ok, msg -> send(JSONObject().put("t", "ctlres").put("v", v).put("ok", ok).put("msg", msg)) }
                 }
             }
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) { dropped(webSocket, "fechado $code $reason") }
@@ -159,6 +160,23 @@ class MonitorService : Service() {
                 if (response?.code == 403) backoff = 10 * 60_000L
             }
         })
+    }
+
+    /** Controles do carro pedidos pelo app do cliente (liberados no painel). Roda pelo ADB (CarCtl). */
+    private fun runCtl(cmd: String, n: Int, reply: (Boolean, String) -> Unit) {
+        val args = when (cmd) {
+            "lock", "unlock", "flash", "find", "ac_on", "ac_off" -> cmd
+            "temp" -> "temp ${n.coerceIn(17, 33)}"
+            "fan" -> "fan ${n.coerceIn(1, 7)}"
+            "win" -> "win ${n.coerceIn(1, 3)} 0"
+            else -> { reply(false, "comando desconhecido"); return }
+        }
+        if (cmd == "ac_on" && Vigia.socLow(applicationContext)) { reply(false, "Bateria de tração abaixo de 5%: não dá para ligar o ar"); return }
+        Thread {
+            val r = try { AdbShell.carCtl(applicationContext, args) } catch (e: Exception) { AdbShell.Result(false, e.message ?: "erro") }
+            Log.i(TAG, "ctl $args -> ${r.ok} ${r.output}")
+            reply(r.ok, if (r.ok) r.output.take(200) else (r.output.ifBlank { r.reason }).take(200))
+        }.start()
     }
 
     private fun reconnectNow(why: String) {
