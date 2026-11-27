@@ -77,6 +77,8 @@ object LiveCam {
     private var audioSrc: org.webrtc.AudioSource? = null
     private var audioTrack: org.webrtc.AudioTrack? = null
     @Volatile private var appCtx: Context? = null
+    @Volatile private var micErr = ""
+    @Volatile private var micRec = false
     private val peers = HashMap<String, Peer>()
     private val timeouts = HashMap<String, Runnable>()
 
@@ -93,6 +95,7 @@ object LiveCam {
             val pc = createPeer(v, ice, codec, send) ?: throw IllegalStateException("não consegui criar a conexão WebRTC")
             // Áudio já negociado (sem trilha = silêncio, microfone fechado); liga quando o celular pede ("mic").
             val atr = try { pc.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY, listOf("cam"))) } catch (t: Throwable) { null }
+            try { pc.setAudioRecording(false) } catch (_: Throwable) {}   // microfone fechado até alguém pedir
             peers[v] = Peer(pc, send, audio = atr)
             pc.createOffer(object : SdpAdapter() {
                 override fun onCreateSuccess(sdp: SessionDescription) {
@@ -144,12 +147,25 @@ object LiveCam {
         try {
             val tr = p.audio ?: throw IllegalStateException("esta conexão não tem áudio — feche e abra a câmera de novo")
             if (on) {
+                val c = appCtx
+                if (c != null && c.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    Thread { try { AdbShell.run(c, "pm grant ${c.packageName} android.permission.RECORD_AUDIO; echo ok", 15000) } catch (_: Throwable) {} }.start()
+                    throw IllegalStateException("o app não tinha permissão de microfone — concedi agora, toque em Ouvir de novo")
+                }
+                micErr = ""
                 val t = ensureAudioTrack()
                 tr.sender.setTrack(t, false); t.setEnabled(true); p.mic = true
                 adm?.setMicrophoneMute(false)
+                try { p.pc.setAudioRecording(true) } catch (_: Throwable) {}
+                // Confere em 2 s se o microfone realmente começou a gravar; se não, avisa o celular com o motivo.
+                main.postDelayed({ exec.execute {
+                    if (peers[v]?.mic == true && (!micRec || micErr.isNotEmpty()))
+                        p.send(JSONObject().put("t", "mic").put("v", v).put("on", true).put("ok", false).put("msg", if (micErr.isNotEmpty()) micErr else "o microfone não começou a gravar"))
+                } }, 2500)
                 appCtx?.let { c -> main.post { try { android.widget.Toast.makeText(c, "🎤 Microfone do carro sendo ouvido pelo app do cliente", android.widget.Toast.LENGTH_LONG).show() } catch (_: Throwable) {} } }
             } else {
                 tr.sender.setTrack(null, false); p.mic = false
+                if (peers.values.none { it.mic }) for (q in peers.values) try { q.pc.setAudioRecording(false) } catch (_: Throwable) {}
             }
             if (peers.values.none { it.mic }) releaseAudio()
             p.send(JSONObject().put("t", "mic").put("v", v).put("on", p.mic).put("ok", true))
@@ -231,8 +247,18 @@ object LiveCam {
         // Microfone: fonte MIC (o "VOICE_COMMUNICATION" pode ser desviado pela central de mídia do carro).
         val a = try {
             org.webrtc.audio.JavaAudioDeviceModule.builder(ctx)
-                .setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+                .setAudioSource(android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION)   // igual ao Sentry (fonte 6, 48 kHz)
+                .setInputSampleRate(48000)
                 .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
+                .setAudioRecordErrorCallback(object : org.webrtc.audio.JavaAudioDeviceModule.AudioRecordErrorCallback {
+                    override fun onWebRtcAudioRecordInitError(m: String?) { micErr = "init: $m" }
+                    override fun onWebRtcAudioRecordStartError(c: org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStartErrorCode?, m: String?) { micErr = "início: $m" }
+                    override fun onWebRtcAudioRecordError(m: String?) { micErr = "$m" }
+                })
+                .setAudioRecordStateCallback(object : org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStateCallback {
+                    override fun onWebRtcAudioRecordStart() { micRec = true }
+                    override fun onWebRtcAudioRecordStop() { micRec = false }
+                })
                 .createAudioDeviceModule()
         } catch (t: Throwable) { null }
         adm = a
