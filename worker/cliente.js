@@ -355,7 +355,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-15';
+const V = 'ubyd-c-16';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -617,11 +617,13 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
   else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
   else if(m.t==='offer'){L.got=true;clearTimeout(L.wd);onOffer(L,m.sdp);}
-  else if(m.t==='mic'){if(!m.ok){L.mic=false;var vv=$('vid-'+i);if(vv)vv.muted=true;micUi(i,false);$('inf-'+i).textContent='🎤 Microfone: '+(m.msg||'não funcionou neste carro');}else micUi(i,m.on);}
+  else if(m.t==='micretry'){AUTOMIC={i:i,tries:(AUTOMIC&&AUTOMIC.i===i?AUTOMIC.tries:0)+1};$('inf-'+i).textContent='🎤 Ajustando o microfone deste carro…';if(AUTOMIC.tries<=7){stopLive();setTimeout(function(){startLive(i);},1500);}else{AUTOMIC=null;micUi(i,false);}}
+  else if(m.t==='mic'){if(!m.ok){L.mic=false;AUTOMIC=null;var vv=$('vid-'+i);if(vv)vv.muted=true;micUi(i,false);$('inf-'+i).textContent='🎤 Microfone: '+(m.msg||'não funcionou neste carro');}else{AUTOMIC=null;micUi(i,m.on);$('inf-'+i).textContent='';}}
   else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.real&&m.real!==m.cam?(' ('+m.real+')'):'')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
    var cs=(m.cams||[]).filter(function(k){return DIAG||k.indexOf('id:')!==0;});L.cams=cs;
    var chips=cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+',true)">'+camName(k)+'</button>';}).join('');
    $('cams-'+i).innerHTML=cs.length<2&&!DIAG?'':chips;
+   if(AUTOMIC&&AUTOMIC.i===i&&!L.mic)setTimeout(function(){if(LIVE&&LIVE.i===i&&!LIVE.mic)toggleMic(i);},900);
    $('fsb-'+i).innerHTML=(cs.length<2?'':chips)+'<button class="fsx" id="micf-'+i+'" onclick="toggleMic('+i+')">'+(LIVE&&LIVE.mic?'🔇 Parar de ouvir':'🎤 Ouvir o carro')+'</button><button class="fsx" onclick="closeFull()">✕ Sair</button>';
    setGrid(L,m.layout==='strip4'?m.tiles:null);
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
@@ -673,6 +675,7 @@ function closeFull(){if(FS==null)return;var el=$('live-'+FS);FS=null;if(el)el.cl
 document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement&&FS!=null)closeFull();});
 function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}L.ms=null;L.mic=false;micUi(L.i,false);var v=$('vid-'+L.i);if(v){v.srcObject=null;v.muted=true;}}
 /* microfone do carro */
+var AUTOMIC=null;
 function micUi(i,on,busy){['mic-'+i,'micf-'+i].forEach(function(id){var b=$(id);if(!b)return;b.textContent=busy?'⏳ Ligando o microfone…':(on?'🔇 Parar de ouvir':'🎤 Ouvir o carro');b.classList.toggle('on',!!on);});}
 function toggleMic(i){var L=LIVE;if(!L||L.i!==i||!L.ws||L.ws.readyState!==1){alert('Abra a câmera ao vivo primeiro.');return;}
  var on=!L.mic;L.mic=on;var v=$('vid-'+i);if(v){v.muted=!on;var p=v.play();if(p&&p.catch)p.catch(function(){});}
