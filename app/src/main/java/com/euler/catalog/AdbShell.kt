@@ -178,6 +178,10 @@ object AdbShell {
             // Ar/janelas: no próprio app. Se faltar permissão, concede pelo ADB e tenta de novo.
             var out = CarCtl.local(ctx, args)
             if (out.contains("aparelho não abriu") || out.contains("Security")) {
+                try { BydUnlock.apply(ctx) } catch (_: Throwable) {}
+                out = CarCtl.local(ctx, args)
+            }
+            if (out.contains("aparelho não abriu") || out.contains("Security")) {
                 run(ctx, CarCtl.PERMS.joinToString("; ") { "pm grant ${ctx.packageName} android.permission.$it 2>/dev/null" } + "; echo ok", 15000)
                 out = CarCtl.local(ctx, args)
             }

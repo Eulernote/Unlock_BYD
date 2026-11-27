@@ -374,10 +374,12 @@ class MainActivity : Activity() {
     }
 
     private fun showVigiaTest() {
-        val opts = arrayOf("▶ Iniciar vigia por 10 min", "▶ Iniciar vigia por 60 min", "ℹ Estado + bateria 12V", "■ Parar vigia")
+        val opts = arrayOf("▶ Iniciar vigia por 10 min", "▶ Iniciar vigia por 60 min", "ℹ Estado + bateria 12V", "■ Parar vigia", "🔐 Trava de ACC pelo próprio app (teste)")
         android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setItems(opts) { _, w ->
             toast("Aguarde…")
             Thread {
+                val ub = BydUnlock.apply(applicationContext)
+                if (w == 4) { val r4 = BydUnlock.appAccLock(); runOnUiThread { android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setMessage("$ub\n\n$r4\nBateria 12V: ${battery12v()}").setPositiveButton("OK", null).show() }; return@Thread }
                 val g = AdbShell.run(applicationContext, CarCtl.PERMS.joinToString("; ") { "pm grant $packageName android.permission.$it 2>&1 | head -1" } + "; echo UBYD_OK", 20000)
                 val r = when (w) {
                     0 -> AdbShell.startVigia(applicationContext, 10)
@@ -386,7 +388,7 @@ class MainActivity : Activity() {
                     else -> AdbShell.stopVigia(applicationContext)
                 }
                 val txt = (if (w <= 1) (if (r.ok) "Vigia LIGADA ✓\n\nAgora desligue o carro, tranque e espere 2–3 min. Depois abra o app do cliente: o carro deve continuar \"Online agora\" e as câmeras devem abrir.\n\n" else "Vigia NÃO ligou ✕\n\n") else "") +
-                    "Permissões: ${g.output.replace("UBYD_OK", "").lines().filter { it.isNotBlank() }.take(3).joinToString(" / ").ifBlank { "ok" }}\nBateria 12V: ${battery12v()}\nTelemetria: ${try { Telemetry.read(applicationContext).toString() } catch (e: Exception) { e.message }}\n\n" + r.output.ifBlank { r.reason }
+                    "Liberações BYD:\n$ub\n\nPermissões: ${g.output.replace("UBYD_OK", "").lines().filter { it.isNotBlank() }.take(3).joinToString(" / ").ifBlank { "ok" }}\nBateria 12V: ${battery12v()}\nTelemetria: ${try { Telemetry.read(applicationContext).toString() } catch (e: Exception) { e.message }}\n\n" + r.output.ifBlank { r.reason }
                 runOnUiThread { android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setMessage(txt).setPositiveButton("OK", null).show() }
             }.start()
         }.show()

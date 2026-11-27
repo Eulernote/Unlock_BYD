@@ -20,8 +20,8 @@ android {
         applicationId = "com.euler.catalog"
         minSdk = 24
         targetSdk = 34
-        versionCode = 76
-        versionName = "8.3"
+        versionCode = 77
+        versionName = "8.4"
         // WebRTC (câmeras ao vivo) traz bibliotecas nativas: só ARM (as multimídias são ARM), APK menor.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
@@ -66,4 +66,6 @@ dependencies {
     // Câmeras ao vivo (v60): WebRTC pré-compilado + WebSocket pro hub de sinalização.
     implementation("io.github.webrtc-sdk:android:114.5735.10")   // WebRTC puro (Java), sem dependência de Kotlin novo
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // Libera chamadas internas do Android (lista branca do ACC e permissões da BYD, como o Overdrive faz).
+    implementation("org.lsposed.hiddenapibypass:hiddenapibypass:4.3")
 }

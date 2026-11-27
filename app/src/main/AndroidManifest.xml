@@ -5,6 +5,8 @@
     <!-- Teste de câmeras (v59): ler as câmeras do veículo (360°/AVM). -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- Telemetria da bateria (tração e 12V) pela API da BYD -->
+    <uses-permission android:name="android.permission.DEVICE_ACC" />
+    <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.BYDAUTO_STATISTIC_GET" />
     <uses-permission android:name="android.permission.BYDAUTO_BODYWORK_GET" />
     <uses-permission android:name="android.permission.BYDAUTO_BMS_GET" />

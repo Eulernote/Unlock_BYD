@@ -23,6 +23,7 @@ import java.io.File
 object AccDaemon {
     private val LOG = File("/data/local/tmp/ubyd_vigia.log")
     private fun log(s: String) {
+        logger?.let { it(s); return }
         val line = java.text.SimpleDateFormat("dd/MM HH:mm:ss", java.util.Locale.US).format(java.util.Date()) + " " + s
         println(line)
         try { LOG.appendText(line + "\n") } catch (_: Throwable) {}
@@ -59,7 +60,8 @@ object AccDaemon {
         // Ao sair, o token morre e o accmodemanager solta a trava (mesmo comportamento do Sentry).
     }
 
-    private fun service(): IBinder? {
+    var logger: ((String) -> Unit)? = null
+    internal fun service(): IBinder? {
         val sm = Class.forName("android.os.ServiceManager")
         val get = sm.getMethod("getService", String::class.java)
         for (n in listOf("accmodemanager", "acc_mode_manager", "AccModeManager")) {
@@ -70,7 +72,7 @@ object AccDaemon {
     }
 
     /** Mesma chamada do Sentry: IAccModeManager, transação 5 (token, tipo 1, motivo, pacote, 0, null). */
-    private fun acquire(token: Binder): Boolean {
+    internal fun acquire(token: Binder): Boolean {
         val b = try { service() } catch (t: Throwable) { log("ServiceManager: ${t.message}"); null } ?: run { log("accmodemanager não existe neste carro"); return false }
         val data = Parcel.obtain(); val reply = Parcel.obtain()
         return try {

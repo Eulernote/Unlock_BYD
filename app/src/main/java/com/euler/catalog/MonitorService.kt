@@ -66,6 +66,7 @@ class MonitorService : Service() {
         ui.postDelayed(teleTick, 5_000)
         // As permissões de leitura da BYD podem precisar ser concedidas (best-effort, pelo ADB do carro).
         Thread {
+            try { BydUnlock.apply(applicationContext) } catch (_: Throwable) {}
             try {
                 val pkg = packageName
                 AdbShell.run(applicationContext, CarCtl.PERMS
