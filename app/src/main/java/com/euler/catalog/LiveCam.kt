@@ -72,25 +72,8 @@ object LiveCam {
     private var sizeMode = "auto"
 
     private class Peer(val pc: PeerConnection, val send: (JSONObject) -> Unit, var offerSent: Boolean = false, var dc: DataChannel? = null, var mic: Boolean = false)
-    // Microfone (v85): trilha de áudio criada só quando algum celular pede para ouvir.
-    private var adm: org.webrtc.audio.JavaAudioDeviceModule? = null
-    private var audioSrc: org.webrtc.AudioSource? = null
-    private var audioTrack: org.webrtc.AudioTrack? = null
+
     @Volatile private var appCtx: Context? = null
-    @Volatile private var micErr = ""
-    @Volatile private var micRec = false
-    // Combinações de fonte/taxa do microfone: o carro testa uma a uma até achar a que grava, e guarda a boa.
-    private val AUDIO_CFGS = listOf(
-        6 to 0, 1 to 0, 5 to 0, 7 to 0, 6 to 16000, 1 to 16000, 0 to 0   // 6=VOICE_RECOGNITION 1=MIC 5=CAMCORDER 7=VOICE_COMMUNICATION 0=DEFAULT · 0=taxa nativa
-    )
-    @Volatile private var audioIdx = -1
-    @Volatile private var micAttempts = 0
-    private fun loadAudioIdx(ctx: Context): Int {
-        if (audioIdx < 0) audioIdx = ctx.getSharedPreferences("livecam", Context.MODE_PRIVATE).getInt("audiocfg", 0).coerceIn(0, AUDIO_CFGS.size - 1)
-        return audioIdx
-    }
-    private fun saveAudioIdx(ctx: Context) { try { ctx.getSharedPreferences("livecam", Context.MODE_PRIVATE).edit().putInt("audiocfg", audioIdx).apply() } catch (_: Throwable) {} }
-    private val peers = HashMap<String, Peer>()
     private val timeouts = HashMap<String, Runnable>()
 
     @Volatile var lastStatus = "parado"; private set
@@ -179,37 +162,6 @@ object LiveCam {
     }
 
     /** Microfone falhou: tenta a próxima combinação (reinicia a transmissão) ou desiste depois de testar todas. */
-    private fun micFailed(v: String, reason: String) {
-        val ctx = appCtx
-        val p = peers[v]
-        if (ctx != null && micAttempts < AUDIO_CFGS.size - 1) {
-            micAttempts++
-            audioIdx = (loadAudioIdx(ctx) + 1) % AUDIO_CFGS.size
-            saveAudioIdx(ctx)
-            Log.i(TAG, "mic: testando combinação $audioIdx (motivo: $reason)")
-            p?.send?.invoke(JSONObject().put("t", "micretry").put("v", v))
-            main.postDelayed({ exec.execute { try { rebuildFactoryForAudio(ctx) } catch (_: Throwable) {} } }, 300)
-        } else {
-            micAttempts = 0
-            p?.send?.invoke(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", "não consegui o microfone neste carro ($reason)"))
-        }
-    }
-
-    private fun ensureAudioTrack(): org.webrtc.AudioTrack {
-        audioTrack?.let { return it }
-        val f = factory ?: throw IllegalStateException("sem WebRTC")
-        val src = f.createAudioSource(MediaConstraints()); audioSrc = src
-        return f.createAudioTrack("mic0", src).also { audioTrack = it }
-    }
-
-    private fun releaseAudio() {
-        val t = audioTrack ?: return
-        for (p in peers.values) try { if (p.audio?.sender?.track() != null) p.audio?.sender?.setTrack(null, false) } catch (_: Throwable) {}
-        try { t.dispose() } catch (_: Throwable) {}
-        try { audioSrc?.dispose() } catch (_: Throwable) {}
-        audioTrack = null; audioSrc = null
-    }
-
     fun stop(v: String) = exec.execute { stopPeer(v) }
     fun stopAll() = exec.execute { for (k in peers.keys.toList()) stopPeer(k, closeCamIfIdle = false); closeCamera() }
 
@@ -264,42 +216,14 @@ object LiveCam {
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(ctx).createInitializationOptions())
         val e = EglBase.create(); egl = e
         appCtx = ctx
-        // Microfone: fonte MIC (o "VOICE_COMMUNICATION" pode ser desviado pela central de mídia do carro).
-        val cfg = AUDIO_CFGS[loadAudioIdx(ctx)]
-        val a = try {
-            org.webrtc.audio.JavaAudioDeviceModule.builder(ctx)
-                .setAudioSource(cfg.first)
-                .apply { if (cfg.second > 0) setInputSampleRate(cfg.second) }
-                .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
-                .setAudioRecordErrorCallback(object : org.webrtc.audio.JavaAudioDeviceModule.AudioRecordErrorCallback {
-                    override fun onWebRtcAudioRecordInitError(m: String?) { micErr = "init: $m" }
-                    override fun onWebRtcAudioRecordStartError(c: org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStartErrorCode?, m: String?) { micErr = "início: $m" }
-                    override fun onWebRtcAudioRecordError(m: String?) { micErr = "$m" }
-                })
-                .setAudioRecordStateCallback(object : org.webrtc.audio.JavaAudioDeviceModule.AudioRecordStateCallback {
-                    override fun onWebRtcAudioRecordStart() { micRec = true }
-                    override fun onWebRtcAudioRecordStop() { micRec = false }
-                })
-                .createAudioDeviceModule()
-        } catch (t: Throwable) { null }
-        adm = a
-        factory = PeerConnectionFactory.builder().apply { if (a != null) setAudioDeviceModule(a) }
+        // O áudio do carro vai pelo canal de dados (AudioMic), não pela captura do WebRTC (recusada neste BYD).
+        factory = PeerConnectionFactory.builder()
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(e.eglBaseContext, true, false))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(e.eglBaseContext))
             .createPeerConnectionFactory()
     }
 
     /** Troca a combinação de áudio e recria a fábrica (os vídeos são refeitos pelo reinício automático no celular). */
-    private fun rebuildFactoryForAudio(ctx: Context) {
-        for (k in peers.keys.toList()) stopPeer(k, closeCamIfIdle = false)
-        closeCamera()
-        try { releaseAudio() } catch (_: Throwable) {}
-        try { adm?.release() } catch (_: Throwable) {}
-        try { factory?.dispose() } catch (_: Throwable) {}
-        adm = null; factory = null
-        ensureFactory(ctx)
-    }
-
     private fun createPeer(v: String, ice: JSONArray?, codec: String, send: (JSONObject) -> Unit): PeerConnection? {
         val servers = ArrayList<PeerConnection.IceServer>()
         if (ice != null) for (i in 0 until ice.length()) {
