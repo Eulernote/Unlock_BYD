@@ -133,13 +133,22 @@ class AssistantTestActivity : Activity() {
         saida = TextView(this).apply {
             setTextColor(Color.parseColor("#CFCFCF")); textSize = 13f
             setPadding(0, pad, 0, 0)
+            val stage = CrashLog.readStage(this@AssistantTestActivity)
             val crash = CrashLog.readLast(this@AssistantTestActivity)
-            text = if (crash != null) "⚠ ULTIMO ERRO (toque um comando pra limpar):\n\n$crash"
-                   else "Toque um comando pronto, ou usa a voz."
+            text = buildString {
+                if (stage != null) append("ULTIMA ETAPA ALCANCADA:\n").append(stage).append("\n\n")
+                if (crash != null) append("⚠ ULTIMO ERRO (toque um comando pra limpar):\n\n").append(crash)
+                if (stage == null && crash == null) append("Toque um comando pronto, ou usa a voz.")
+            }
         }
         col.addView(saida)
 
-        setContentView(ScrollView(this).apply { addView(col) })
+        setContentView(ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#0E0E0E"))
+            addView(col)
+        })
+        // Sobrevivemos ao onCreate: limpa crash Java antigo (o da voz é nativo e vem pela ETAPA).
+        CrashLog.clear(applicationContext)
     }
 
     private fun voiceEngine(): VoiceEngine {
@@ -199,11 +208,14 @@ class AssistantTestActivity : Activity() {
     }
 
     private fun comModelos(then: () -> Unit) {
+        CrashLog.stage(applicationContext, "voz: verificando modelos")
         if (VoiceModels.isReady(this)) { then(); return }
         setStatus("Baixando modelos de voz do R2 (só na 1ª vez, ~100 MB)…")
+        CrashLog.stage(applicationContext, "voz: baixando modelos do R2")
         Thread {
             try {
                 val ok = VoiceModels.download(this) { msg -> runOnUiThread { setStatus(msg) } }
+                CrashLog.stage(applicationContext, "voz: download terminou (ok=$ok)")
                 runOnUiThread { if (ok) safe { then() } else setStatus("Nao consegui baixar os modelos de voz.") }
             } catch (e: Throwable) {
                 CrashLog.write(applicationContext, "download", e)

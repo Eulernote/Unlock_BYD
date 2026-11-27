@@ -33,6 +33,21 @@ object CrashLog {
         } catch (_: Throwable) {}
     }
 
+    private fun stageFile(ctx: Context) = File(ctx.filesDir, "heyup_stage.log")
+
+    /** Marca a última etapa alcançada (pra pinpoint de crash nativo, que não gera stacktrace Java). */
+    fun stage(ctx: Context, label: String) {
+        try {
+            val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            stageFile(ctx).writeText("[$ts] $label")
+        } catch (_: Throwable) {}
+    }
+
+    fun readStage(ctx: Context): String? = try {
+        val f = stageFile(ctx)
+        if (f.exists() && f.length() > 0) f.readText() else null
+    } catch (_: Throwable) { null }
+
     fun readLast(ctx: Context): String? = try {
         val f = file(ctx)
         if (f.exists() && f.length() > 0) f.readText().takeLast(2500) else null

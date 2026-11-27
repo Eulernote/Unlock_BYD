@@ -50,6 +50,7 @@ class VoiceEngine(
         if (inited) return
         initModels()
         inited = true
+        CrashLog.stage(ctx, "voz: modelos carregados OK")
     }
 
     fun start() {
@@ -71,6 +72,7 @@ class VoiceEngine(
      */
     fun captureOnce() {
         Thread({
+            CrashLog.stage(ctx, "voz: iniciando (push-to-talk)")
             try { ensureInit() } catch (e: Throwable) { onError("Erro ao iniciar a voz: ${e.message}"); return@Thread }
             val rec = try { newAudioRecord() } catch (e: Throwable) {
                 onError("Sem acesso ao microfone: ${e.message}"); return@Thread
@@ -80,6 +82,7 @@ class VoiceEngine(
             try {
                 rec.startRecording()
                 onWake()
+                CrashLog.stage(ctx, "voz: gravando (fale agora)")
                 val limite = System.currentTimeMillis() + 7000
                 var texto = ""
                 while (System.currentTimeMillis() < limite && texto.isBlank()) {
@@ -89,6 +92,7 @@ class VoiceEngine(
                     v.acceptWaveform(samples)
                     while (!v.empty()) {
                         val seg = v.front()
+                        CrashLog.stage(ctx, "voz: reconhecendo a fala")
                         texto = recognize(seg.samples)
                         v.pop()
                     }
@@ -112,6 +116,7 @@ class VoiceEngine(
     private fun initModels() {
         val feat = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80)
 
+        CrashLog.stage(ctx, "voz: carregando VAD (1o uso da lib nativa)")
         // Detecção de fala (quando a pessoa começa/para de falar).
         vad = Vad(
             assetManager = null,
@@ -130,6 +135,7 @@ class VoiceEngine(
             )
         )
 
+        CrashLog.stage(ctx, "voz: carregando reconhecimento (Whisper)")
         // Reconhecimento em português (Whisper multilíngue).
         asr = OfflineRecognizer(
             assetManager = null,
@@ -149,6 +155,7 @@ class VoiceEngine(
             )
         )
 
+        CrashLog.stage(ctx, "voz: carregando palavra-chave (KWS)")
         // Palavra de ativação ("Hey Up") — opcional: se falhar, o push-to-talk ("Falar agora")
         // continua funcionando (só VAD + ASR). Só o modo ambiente depende dela.
         kws = try {
