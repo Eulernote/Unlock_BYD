@@ -133,6 +133,26 @@ object CarCtl {
         return out.toString().trim()
     }
 
+    /** Estado atual do ar: {t:'ac', on, temp, fan} ou null se não conseguir ler. Usado pelo painel em tempo real. */
+    fun acState(ctx: Context): org.json.JSONObject? {
+        val c = BydUnlock.BypassCtx(ctx.applicationContext)
+        val ac = dev(c, "ac") ?: return null
+        val on = numCall(ac, "getAcStartState")
+        val temp = numCall(ac, "getAcTemperature", 1) ?: numCall(ac, "getAcTemperature")
+        val fan = numCall(ac, "getAcWindLevel")
+        if (on == null && temp == null && fan == null) return null
+        val o = org.json.JSONObject().put("t", "ac")
+        if (on != null) o.put("on", on.toInt() != 0)
+        if (temp != null && temp >= 15 && temp <= 35) o.put("temp", temp.toInt())
+        if (fan != null && fan >= 0 && fan <= 10) o.put("fan", fan.toInt())
+        return o
+    }
+    private fun numCall(obj: Any?, name: String, vararg a: Int): Double? {
+        obj ?: return null
+        val m = obj.javaClass.methods.firstOrNull { it.name == name && it.parameterTypes.size == a.size && it.parameterTypes.all { p -> p == Int::class.javaPrimitiveType } } ?: return null
+        return try { (m.invoke(obj, *a.map { it as Any }.toTypedArray()) as? Number)?.toDouble() } catch (_: Throwable) { null }
+    }
+
     private fun exec(ctx: Context, cmd: String, a: List<String>): String {
         val ints = a.mapNotNull { it.toIntOrNull() }
         return when (cmd) {

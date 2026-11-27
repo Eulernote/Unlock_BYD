@@ -51,6 +51,22 @@ class MonitorService : Service() {
     private var netCb: android.net.ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastPong = 0L
     @Volatile private var lastGrant = 0L
+    @Volatile private var lastAc = ""
+    // Estado do ar (liga/desliga, temperatura, velocidade): lido a cada 5 s e enviado ao painel só quando muda.
+    private val acTick = object : Runnable {
+        override fun run() {
+            Thread {
+                try {
+                    val a = CarCtl.acState(applicationContext)
+                    if (a != null) {
+                        val sig = a.optBoolean("on").toString() + "/" + a.optInt("temp", -1) + "/" + a.optInt("fan", -1)
+                        if (sig != lastAc) { lastAc = sig; ws?.send(a.toString()) }
+                    }
+                } catch (_: Exception) {}
+            }.start()
+            if (running) ui.postDelayed(this, 5_000)
+        }
+    }
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var beat = 0
     private var scrRx: android.content.BroadcastReceiver? = null
@@ -106,6 +122,7 @@ class MonitorService : Service() {
         ui.postDelayed(teleTick, 5_000)
         try { wakeLock = (getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "UnlockBYD:vigia").apply { setReferenceCounted(false) } } catch (_: Exception) {}
         ui.postDelayed(wakeTick, 8_000)
+        ui.postDelayed(acTick, 6_000)
         // As permissões de leitura da BYD podem precisar ser concedidas (best-effort, pelo ADB do carro).
         Thread {
             try { BydUnlock.apply(applicationContext) } catch (_: Throwable) {}
@@ -191,7 +208,7 @@ class MonitorService : Service() {
         val url = Store.SERVER.replaceFirst("https://", "wss://") + "/ws/car?id=" + Store.carId(this)
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                connected = true; backoff = 5_000L; lastPong = System.currentTimeMillis()
+                connected = true; backoff = 5_000L; lastPong = System.currentTimeMillis(); lastAc = ""
                 VLog.add(applicationContext, "hub conectado · rede=${netName()}")
                 ui.post { ui.removeCallbacks(teleTick); ui.postDelayed(teleTick, 3_000) }
                 Log.i(TAG, "conectado ao hub")
@@ -223,6 +240,7 @@ class MonitorService : Service() {
 
     /** Controles do carro pedidos pelo app do cliente (liberados no painel). Roda pelo ADB (CarCtl). */
     private fun runCtl(cmd: String, n: Int, reply: (Boolean, String) -> Unit) {
+        if (cmd == "car_on" || cmd == "car_off") { reply(false, "Ligar/desligar o veículo ainda está em desenvolvimento neste carro"); return }
         val args = when (cmd) {
             "lock", "unlock", "flash", "find", "ac_on", "ac_off" -> cmd
             "temp" -> "temp ${n.coerceIn(17, 33)}"
