@@ -149,6 +149,31 @@ object AdbShell {
         return if (r.output.contains("UBYD_OK")) Result(true, r.output) else Result(false, r.output, r.reason)
     }
 
+    // ---------- VIGIA (carro desligado) — teste v70 ----------
+    private const val VIGIA_LOG = "/data/local/tmp/ubyd_vigia.log"
+    private const val VIGIA_CLS = "com.euler.catalog.AccDaemon"
+
+    /** Inicia o processo que segura a multimídia acordada por [minutes] minutos (roda como shell, fora do app). */
+    fun startVigia(ctx: Context, minutes: Int): Result {
+        val apk = ctx.applicationInfo.sourceDir
+        val cmd = "pkill -f $VIGIA_CLS 2>/dev/null; rm -f $VIGIA_LOG; " +
+            "(CLASSPATH=$apk setsid nohup app_process /system/bin $VIGIA_CLS $minutes >/dev/null 2>&1 &) ; " +
+            "sleep 3; cat $VIGIA_LOG 2>/dev/null; pgrep -f $VIGIA_CLS >/dev/null && echo UBYD_RUNNING; echo UBYD_OK"
+        val r = run(ctx, cmd, 20000)
+        return if (r.output.contains("UBYD_RUNNING")) Result(true, r.output.replace("UBYD_RUNNING", "").replace("UBYD_OK", "").trim())
+        else Result(false, r.output.replace("UBYD_OK", "").trim(), r.reason)
+    }
+
+    fun stopVigia(ctx: Context): Result {
+        val r = run(ctx, "pkill -f $VIGIA_CLS 2>/dev/null; sleep 1; pgrep -f $VIGIA_CLS >/dev/null && echo AINDA_RODANDO || echo parada; tail -3 $VIGIA_LOG 2>/dev/null", 15000)
+        return Result(!r.output.contains("AINDA_RODANDO"), r.output.trim(), r.reason)
+    }
+
+    fun vigiaStatus(ctx: Context): Result {
+        val r = run(ctx, "pgrep -f $VIGIA_CLS >/dev/null && echo '● RODANDO' || echo '○ PARADA'; tail -12 $VIGIA_LOG 2>/dev/null", 15000)
+        return Result(true, r.output.trim(), r.reason)
+    }
+
     /** Abre a tela de início automático da BYD pelo shell (fallback quando o Context não consegue). */
     fun openAutostartPage(ctx: Context): Result {
         val cmds = listOf(

@@ -52,3 +52,6 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+
+# Vigia: roda via app_process pelo nome da classe. NAO ofuscar.
+-keep class com.euler.catalog.AccDaemon { *; }

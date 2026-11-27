@@ -348,10 +348,43 @@ class MainActivity : Activity() {
     }
 
     /** Menu escondido (5 toques na logo): ADB, diagnósticos e testes — fora da tela inicial. */
+    /** Teste da vigia: segura a multimídia acordada por um tempo, pra ver se dá pra assistir com o carro desligado. */
+    private fun showVigiaTest() {
+        val opts = arrayOf("▶ Iniciar vigia por 10 min", "▶ Iniciar vigia por 60 min", "ℹ Estado + bateria 12V", "■ Parar vigia")
+        android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setItems(opts) { _, w ->
+            toast("Aguarde…")
+            Thread {
+                val r = when (w) {
+                    0 -> AdbShell.startVigia(applicationContext, 10)
+                    1 -> AdbShell.startVigia(applicationContext, 60)
+                    2 -> AdbShell.vigiaStatus(applicationContext)
+                    else -> AdbShell.stopVigia(applicationContext)
+                }
+                val txt = (if (w <= 1) (if (r.ok) "Vigia LIGADA ✓\n\nAgora desligue o carro, tranque e espere 2–3 min. Depois abra o app do cliente: o carro deve continuar \"Online agora\" e as câmeras devem abrir.\n\n" else "Vigia NÃO ligou ✕\n\n") else "") +
+                    "Bateria 12V: ${battery12v()}\n\n" + r.output.ifBlank { r.reason }
+                runOnUiThread { android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setMessage(txt).setPositiveButton("OK", null).show() }
+            }.start()
+        }.show()
+    }
+
+    /** Tenta ler a tensão da bateria de 12V pela API da BYD (igual o Overdrive). */
+    private fun battery12v(): String {
+        return try {
+            val cls = Class.forName("android.hardware.bydauto.bodywork.BYDAutoBodyworkDevice")
+            val dev = cls.getMethod("getInstance", android.content.Context::class.java).invoke(null, applicationContext)
+            for (m in listOf("getBatteryVoltage", "getBatteryPowerVoltage")) {
+                val v = try { cls.getMethod(m).invoke(dev) } catch (_: Throwable) { null }
+                if (v != null) return "$v ($m)"
+            }
+            "não disponível"
+        } catch (t: Throwable) { "não disponível (${t.javaClass.simpleName})" }
+    }
+
     private fun showHiddenToolsMenu() {
         val items = listOf(
             "⬆ Procurar atualização do Unlock BYD agora" to { checkUpdatesNow() },
             "📷 Teste de câmeras" to { startActivity(Intent(this, CameraTestActivity::class.java)); Unit },
+            "🛡 Vigia (teste): manter acordada com o carro desligado" to { showVigiaTest() },
             "ADAS: testar códigos p/ esconder (Shark)" to { showAdasTestMenu() },
             "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
             "Início automático (religar / diagnóstico)" to { showAutostart() },
