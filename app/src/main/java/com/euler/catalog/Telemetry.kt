@@ -9,11 +9,12 @@ import org.json.JSONObject
  * monitoramento, para o painel e o app do cliente mostrarem o gráfico de consumo (ex.: com a vigia ligada).
  */
 object Telemetry {
+    @Volatile var lastErr = ""
     private fun device(ctx: Context, cls: String): Pair<Class<*>, Any>? = try {
         val c = Class.forName(cls)
         val d = c.getMethod("getInstance", Context::class.java).invoke(null, ctx.applicationContext)
-        if (d != null) c to d else null
-    } catch (_: Throwable) { null }
+        if (d != null) c to d else { lastErr = cls.substringAfterLast('.') + ": null"; null }
+    } catch (t: Throwable) { val e = t.cause ?: t; lastErr = cls.substringAfterLast('.') + ": " + e.javaClass.simpleName + " " + (e.message ?: "").take(120); null }
 
     private fun num(dev: Pair<Class<*>, Any>?, vararg names: String): Double? {
         dev ?: return null
@@ -37,6 +38,7 @@ object Telemetry {
         }
         num(body, "getBatteryVoltageLevel")?.let { o.put("v12lvl", it.toInt()) }
         num(body, "getAutoSystemState")?.let { o.put("sys", it.toInt()) }
+        if (!o.has("soc") && !o.has("v12") && lastErr.isNotEmpty()) o.put("err", lastErr)
         return o
     }
 }

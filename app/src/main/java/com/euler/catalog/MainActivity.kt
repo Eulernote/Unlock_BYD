@@ -378,6 +378,7 @@ class MainActivity : Activity() {
         android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setItems(opts) { _, w ->
             toast("Aguarde…")
             Thread {
+                val g = AdbShell.run(applicationContext, CarCtl.PERMS.joinToString("; ") { "pm grant $packageName android.permission.$it 2>&1 | head -1" } + "; echo UBYD_OK", 20000)
                 val r = when (w) {
                     0 -> AdbShell.startVigia(applicationContext, 10)
                     1 -> AdbShell.startVigia(applicationContext, 60)
@@ -385,7 +386,7 @@ class MainActivity : Activity() {
                     else -> AdbShell.stopVigia(applicationContext)
                 }
                 val txt = (if (w <= 1) (if (r.ok) "Vigia LIGADA ✓\n\nAgora desligue o carro, tranque e espere 2–3 min. Depois abra o app do cliente: o carro deve continuar \"Online agora\" e as câmeras devem abrir.\n\n" else "Vigia NÃO ligou ✕\n\n") else "") +
-                    "Bateria 12V: ${battery12v()}\nTelemetria: ${try { Telemetry.read(applicationContext).toString() } catch (e: Exception) { e.message }}\n\n" + r.output.ifBlank { r.reason }
+                    "Permissões: ${g.output.replace("UBYD_OK", "").lines().filter { it.isNotBlank() }.take(3).joinToString(" / ").ifBlank { "ok" }}\nBateria 12V: ${battery12v()}\nTelemetria: ${try { Telemetry.read(applicationContext).toString() } catch (e: Exception) { e.message }}\n\n" + r.output.ifBlank { r.reason }
                 runOnUiThread { android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setMessage(txt).setPositiveButton("OK", null).show() }
             }.start()
         }.show()
@@ -401,7 +402,7 @@ class MainActivity : Activity() {
                 if (v != null) return "$v ($m)"
             }
             "não disponível"
-        } catch (t: Throwable) { "não disponível (${t.javaClass.simpleName})" }
+        } catch (t: Throwable) { val c = t.cause ?: t; "não disponível (${c.javaClass.simpleName}: ${c.message})" }
     }
 
     private fun showHiddenToolsMenu() {

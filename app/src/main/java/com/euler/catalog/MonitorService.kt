@@ -50,6 +50,7 @@ class MonitorService : Service() {
     private val http = OkHttpClient.Builder().readTimeout(0, TimeUnit.MILLISECONDS).connectTimeout(15, TimeUnit.SECONDS).pingInterval(20, TimeUnit.SECONDS).build()
     private var netCb: android.net.ConnectivityManager.NetworkCallback? = null
     @Volatile private var lastPong = 0L
+    @Volatile private var lastGrant = 0L
     private var ws: WebSocket? = null
     private var backoff = 5_000L
     private var running = false
@@ -109,7 +110,13 @@ class MonitorService : Service() {
         override fun run() {
             Thread {
                 try {
-                    val t = Telemetry.read(applicationContext)
+                    var t = Telemetry.read(applicationContext)
+                    // Sem leitura? Provavelmente falta permissão da BYD: concede pelo ADB (no máximo a cada 30 min) e lê de novo.
+                    if (!t.has("soc") && !t.has("v12") && System.currentTimeMillis() - lastGrant > 30 * 60_000L) {
+                        lastGrant = System.currentTimeMillis()
+                        AdbShell.run(applicationContext, CarCtl.PERMS.joinToString("; ") { "pm grant $packageName android.permission.$it 2>/dev/null" } + "; echo ok", 20000)
+                        t = Telemetry.read(applicationContext)
+                    }
                     val vig = try { Vigia.tick(applicationContext, t) } catch (e: Exception) { "erro" }
                     t.put("vig", vig)
                     if (t.has("soc") || t.has("v12")) ws?.send(t.toString())
