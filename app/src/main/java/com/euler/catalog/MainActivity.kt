@@ -414,6 +414,10 @@ class MainActivity : Activity() {
             "📷 Teste de câmeras" to { startActivity(Intent(this, CameraTestActivity::class.java)); Unit },
             "🛡 Vigia (teste): manter acordada com o carro desligado" to { showVigiaTest() },
             "🎛 Controles do carro (teste): trancar, ar, janelas" to { showCarCtlTest() },
+            "🎤 Teste de microfone (SEM câmera)" to {
+                toast("Testando o microfone… fale perto do microfone do teto")
+                Thread { val r = AudioMic.probe(applicationContext); runOnUiThread { android.app.AlertDialog.Builder(this).setTitle("Microfone sem câmera").setMessage(r).setPositiveButton("OK", null).show() } }.start()
+            },
             "📜 Registro do vigia (o que aconteceu ao desligar)" to {
                 toast("Aguarde…")
                 Thread {

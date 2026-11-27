@@ -127,5 +127,34 @@ object AudioMic {
 
     private fun rel(rec: AudioRecord) { try { rec.release() } catch (_: Throwable) {} }
 
+    /** Teste isolado: grava o microfone SEM abrir a câmera, para ver se o conflito é câmera + mic. */
+    fun probe(ctx: Context): String {
+        if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) { prepare(ctx); return "liberei a permissão — rode de novo" }
+        prepare(ctx)
+        val sb = StringBuilder()
+        for (rate in RATES) {
+            val minBuf = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBuf <= 0) continue
+            val bufSize = Math.max(minBuf * 4, 30720)
+            for (src in SOURCES) {
+                val rec = try { build(src, rate, bufSize) } catch (t: Throwable) { sb.append("$src@$rate: criar ${t.message}\n"); continue }
+                if (rec.state != AudioRecord.STATE_INITIALIZED) { sb.append("$src@$rate: não inicializou\n"); rel(rec); continue }
+                try { rec.startRecording() } catch (t: Throwable) { sb.append("$src@$rate: start ${t.message}\n"); rel(rec); continue }
+                val b = ByteArray(1920); var total = 0; var maxAbs = 0; var t = 0
+                while (t < 30) {
+                    val n = rec.read(b, 0, b.size)
+                    if (n > 0) { total += n; val sh = java.nio.ByteBuffer.wrap(b, 0, n).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer(); while (sh.hasRemaining()) { val a = Math.abs(sh.get().toInt()); if (a > maxAbs) maxAbs = a }; if (total > 8000 && maxAbs > 30) break; if (total > 24000) break }
+                    else if (n < 0 && n != AudioRecord.ERROR_INVALID_OPERATION) break
+                    try { Thread.sleep(50) } catch (_: InterruptedException) {}; t++
+                }
+                sb.append("$src@$rate: estado=${rec.recordingState} bytes=$total pico=$maxAbs\n")
+                try { rec.stop() } catch (_: Throwable) {}; rel(rec)
+                if (total > 0 && maxAbs > 30) { sb.append("\n✅ GRAVOU na fonte $src @ $rate (pico $maxAbs) — o problema é a câmera!"); return sb.toString() }
+            }
+        }
+        sb.append("\n❌ nem sem câmera gravou — não é a câmera")
+        return sb.toString()
+    }
+
     fun stop() { running = false; thread = null }
 }
