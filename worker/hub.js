@@ -179,6 +179,9 @@ export class CarHub {
         if(car) send(car, {t: 'answer', v: a.vid, sdp: m.sdp.slice(0, 20000)});
       } else if(m.t === 'stop'){
         if(car) send(car, {t: 'stop', v: a.vid});
+      } else if(m.t === 'mic'){
+        if(a.cam === false) return send(ws, {t: 'mic', on: false, ok: false, msg: 'Câmeras não liberadas para este carro'});
+        if(car) send(car, {t: 'mic', v: a.vid, on: m.on === true});
       }
     }
   }

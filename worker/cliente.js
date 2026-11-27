@@ -355,7 +355,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-14';
+const V = 'ubyd-c-15';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -428,6 +428,7 @@ input:focus{border-color:var(--ac)}
 .on{color:var(--gr)}.off{color:var(--fa)}
 .ctl{margin-top:12px;border-top:1px solid rgba(128,128,128,.2);padding-top:10px}.ctlh{font-weight:700;margin-bottom:8px}.cg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
 .cb{border:1px solid rgba(128,128,128,.35);background:rgba(128,128,128,.08);color:inherit;border-radius:12px;padding:11px 8px;font-size:14px;cursor:pointer}.cb:active{transform:scale(.97)}.cb.cp{background:#2bb0a6;border-color:#2bb0a6;color:#04201d;font-weight:700}
+.cb.mic{width:100%;margin:10px 0 2px}.cb.mic.on,.fsx.on{background:#ef5350;border-color:#ef5350;color:#fff}
 .cr{display:flex;justify-content:space-between;align-items:center;margin:8px 0}.st{display:flex;align-items:center;gap:10px}.st .cb{width:42px;padding:8px 0;font-size:18px}.st b{min-width:54px;text-align:center}
 .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.chip{background:var(--s2);border:1px solid var(--bd);color:var(--tx);border-radius:99px;padding:6px 12px;font-size:13px}.chip.sel{background:var(--ac);color:#04201D;border-color:var(--ac);font-weight:700}
 select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-radius:10px;padding:6px 8px;font-size:13px}
@@ -531,6 +532,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
       '<div class="dot" id="inf-'+i+'" style="margin-top:6px;min-height:16px"></div>'+
       (DIAG?'<div class="dot" id="sta-'+i+'" style="min-height:16px"></div>':'')+
       '<div class="chips" id="cams-'+i+'"></div>'+
+      '<button class="cb mic" id="mic-'+i+'" onclick="toggleMic('+i+')">🎤 Ouvir o carro</button>'+
       (DIAG?'<div class="dot" style="margin-top:8px">Resolução (teste): <select id="sz-'+i+'" onchange="pickCam('+i+',null)"><option value="auto">Padrão (720x576)</option><option>1280x720</option><option>1920x1080</option><option>1280x960</option><option>720x576</option><option>720x480</option><option>5120x960</option></select> Codec: <select id="cd-'+i+'" onchange="restartLive('+i+')"><option value="auto">H264 (padrão)</option><option>VP8</option></select></div>':'')+
       '<button class="btn btn-p" id="pb-'+i+'" onclick="toggleLive('+i+')">▶ Ver ao vivo</button>')
      :(cc?'':'<div class="live"><div class="ov">📷 Câmeras indisponíveis para este carro no momento.</div></div>'))+
@@ -615,11 +617,12 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
   else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
   else if(m.t==='offer'){L.got=true;clearTimeout(L.wd);onOffer(L,m.sdp);}
+  else if(m.t==='mic'){if(!m.ok){L.mic=false;var vv=$('vid-'+i);if(vv)vv.muted=true;micUi(i,false);$('inf-'+i).textContent='🎤 Microfone: '+(m.msg||'não funcionou neste carro');}else micUi(i,m.on);}
   else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.real&&m.real!==m.cam?(' ('+m.real+')'):'')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));
    var cs=(m.cams||[]).filter(function(k){return DIAG||k.indexOf('id:')!==0;});L.cams=cs;
    var chips=cs.map(function(k,j){return '<button class="chip'+(k===m.cam?' sel':'')+'" onclick="pickCam('+i+','+j+',true)">'+camName(k)+'</button>';}).join('');
    $('cams-'+i).innerHTML=cs.length<2&&!DIAG?'':chips;
-   $('fsb-'+i).innerHTML=(cs.length<2?'':chips)+'<button class="fsx" onclick="closeFull()">✕ Sair</button>';
+   $('fsb-'+i).innerHTML=(cs.length<2?'':chips)+'<button class="fsx" id="micf-'+i+'" onclick="toggleMic('+i+')">'+(LIVE&&LIVE.mic?'🔇 Parar de ouvir':'🎤 Ouvir o carro')+'</button><button class="fsx" onclick="closeFull()">✕ Sair</button>';
    setGrid(L,m.layout==='strip4'?m.tiles:null);
    var sz=$('sz-'+i);if(sz&&m.size)sz.value=m.size;}
   else if(m.t==='stats'){L.car=m;}
@@ -631,7 +634,7 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
 function gathered(pc,ms){return new Promise(function(res){if(pc.iceGatheringState==='complete')return res();var t=setTimeout(res,ms);
  pc.addEventListener('icegatheringstatechange',function(){if(pc.iceGatheringState==='complete'){clearTimeout(t);res();}});});}
 function onOffer(L,sdp){dropPc(L);var pc=new RTCPeerConnection({iceServers:L.ice});L.pc=pc;var v=$('vid-'+L.i);
- pc.ontrack=function(e){if(!v)return;v.srcObject=(e.streams&&e.streams[0])?e.streams[0]:new MediaStream([e.track]);var p=v.play();if(p&&p.catch)p.catch(function(){});};
+ pc.ontrack=function(e){if(!v)return;L.ms=L.ms||new MediaStream();if(L.ms.getTracks().indexOf(e.track)<0)L.ms.addTrack(e.track);if(v.srcObject!==L.ms)v.srcObject=L.ms;v.muted=!L.mic;var p=v.play();if(p&&p.catch)p.catch(function(){});};
  pc.onconnectionstatechange=function(){if(L.pc!==pc)return;var s=pc.connectionState;
   if(s==='connected')ov(L.i,'');else if(s==='failed')ov(L.i,'Não consegui receber o vídeo nesta rede. Tente de novo (ou em outra rede).');else if(s==='disconnected')ov(L.i,'Sinal instável…');};
  pc.setRemoteDescription({type:'offer',sdp:sdp}).then(function(){return pc.createAnswer();}).then(function(a){return pc.setLocalDescription(a);})
@@ -668,7 +671,12 @@ function closeFull(){if(FS==null)return;var el=$('live-'+FS);FS=null;if(el)el.cl
  try{if(screen.orientation&&screen.orientation.unlock)screen.orientation.unlock();}catch(e){}
  try{if(document.fullscreenElement)document.exitFullscreen();}catch(e){}}
 document.addEventListener('fullscreenchange',function(){if(!document.fullscreenElement&&FS!=null)closeFull();});
-function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}var v=$('vid-'+L.i);if(v)v.srcObject=null;}
+function dropPc(L){if(L.pc){try{L.pc.close();}catch(e){}L.pc=null;}L.ms=null;L.mic=false;micUi(L.i,false);var v=$('vid-'+L.i);if(v){v.srcObject=null;v.muted=true;}}
+/* microfone do carro */
+function micUi(i,on,busy){['mic-'+i,'micf-'+i].forEach(function(id){var b=$(id);if(!b)return;b.textContent=busy?'⏳ Ligando o microfone…':(on?'🔇 Parar de ouvir':'🎤 Ouvir o carro');b.classList.toggle('on',!!on);});}
+function toggleMic(i){var L=LIVE;if(!L||L.i!==i||!L.ws||L.ws.readyState!==1){alert('Abra a câmera ao vivo primeiro.');return;}
+ var on=!L.mic;L.mic=on;var v=$('vid-'+i);if(v){v.muted=!on;var p=v.play();if(p&&p.catch)p.catch(function(){});}
+ micUi(i,on,on);L.ws.send(JSON.stringify({t:'mic',on:on}));}
 function stopLive(msg){var L=LIVE;if(!L)return;closeFull();if(L.raf)cancelAnimationFrame(L.raf);var cv=$('cv-'+L.i);if(cv)cv.style.display='none';L.done=true;LIVE=null;clearTimeout(L.timer);clearTimeout(L.wd);clearInterval(L.stats);var se=$('sta-'+L.i);if(se)se.textContent='';
  try{L.ws.send(JSON.stringify({t:'stop'}));}catch(e){}try{L.ws.close();}catch(e){}dropPc(L);
  var b=$('pb-'+L.i);if(b)b.textContent='▶ Ver ao vivo';ov(L.i,msg||'📷 Toque em “Ver ao vivo”');}
