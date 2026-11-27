@@ -296,9 +296,9 @@ export async function handleClient(request, env, p, H){
       const [c, m, seen] = await Promise.all([H.getCar(env, id), getMon(env, id), H.getSeen(env, id)]);
       // Só mostra carros em que ele continua na lista (a equipe pode ter removido) e que estão ativos.
       if(!c || (m.clients || []).indexOf(user) < 0) continue;
-      let online = false, bat = null;
-      if(env.CAR_HUB && monAny(m)){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; if(bat && j.vig) bat.vig = j.vig.s; }catch(e){} }
-      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, controls: !!m.ctl, seen: seen || c.seen || 0, online: online, bat: bat});
+      let online = false, bat = null, ac = null;
+      if(env.CAR_HUB && monAny(m)){ try{ const r = await env.CAR_HUB.get(env.CAR_HUB.idFromName(id)).fetch('https://hub/status'); const j = await r.json(); online = !!j.online; bat = j.bat || null; if(bat && j.vig) bat.vig = j.vig.s; ac = j.ac || null; }catch(e){} }
+      cars.push({id:id, nome:c.nome, active: c.status === 'active', monitor: !!m.on, controls: !!m.ctl, seen: seen || c.seen || 0, online: online, bat: bat, ac: ac});
     }
     return H.json({user:user, cars:cars});
   }
@@ -355,7 +355,7 @@ const MANIFEST = {
 
 // Service worker: só guarda a "casca" (página + ícones) pra abrir rápido; a API sempre vai na rede.
 const SW_JS = `
-const V = 'ubyd-c-16';
+const V = 'ubyd-c-17';
 const SHELL = ['/c/', '/c/manifest.webmanifest', '/c/icon-192.png', '/c/icon-512.png', '/c/apple-touch-icon.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
@@ -500,7 +500,7 @@ select{background:var(--s2);color:var(--tx);border:1px solid var(--bd);border-ra
 var T=null,U=null,CARS=[];var DIAG=/[?&]diag=1/.test(location.search);try{T=localStorage.getItem('ubyd_c_token');U=localStorage.getItem('ubyd_c_user');}catch(e){}
 function $(i){return document.getElementById(i);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function show(v){['login','pair','home','forgot'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home'){loadMe();pushState();}}
+function show(v){['login','pair','home','forgot'].forEach(function(x){$('v-'+x).classList.toggle('hide',x!==v);});if(v==='home'){loadMe();pushState();startHomePoll();}else{stopHomePoll();}}
 function save(t,u){T=t;U=u;try{localStorage.setItem('ubyd_c_token',t);localStorage.setItem('ubyd_c_user',u);}catch(e){}}
 function logout(){T=null;U=null;try{localStorage.removeItem('ubyd_c_token');localStorage.removeItem('ubyd_c_user');}catch(e){}show('login');}
 function api(path,body){return fetch(path,{method:body?'POST':'GET',headers:Object.assign({'Content-Type':'application/json'},T?{'Authorization':'Bearer '+T}:{}),body:body?JSON.stringify(body):undefined})
@@ -523,7 +523,7 @@ function loadMe(){if(LIVE)stopLive();$('cars').innerHTML='<div class="card" styl
    var st=!c.active?'<span class="tag" style="color:var(--am)">Acesso suspenso</span>':(!(c.monitor||c.controls)?'<span class="tag">Monitoramento desligado</span>':'<span class="tag" style="color:var(--gr)">'+(c.monitor&&c.controls?'Câmeras e controles liberados':c.monitor?'Câmeras liberadas':'Controles liberados')+'</span>');
    var conn=c.online?'<span class="on">● Online agora</span>':'<span class="off">○ Desligado ou sem internet · último contato '+ago(c.seen)+'</span>';
    var can=c.active&&c.monitor,cc=c.active&&c.controls;
-   return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot">'+conn+'</div></div></div>'+
+   return '<div class="card"><div class="car"><div class="ic">🚗</div><div style="flex:1"><b>'+esc(c.nome)+'</b><div class="dot" id="conn-'+i+'">'+conn+'</div></div></div>'+
     '<div style="margin-top:10px">'+st+'</div>'+
     (c.bat?teleAlert(c.bat,c.bat.vig):'')+(c.bat?('<div class="dot" style="margin-top:8px">🔋 <b style="color:var(--tx)">'+nb(c.bat.soc,1)+'%</b>'+(c.bat.v12!=null?' &nbsp;·&nbsp; 12V <b style="color:var(--tx)">'+nb(c.bat.v12,2)+' V</b>':'')+' <span style="color:var(--fa)">· '+ago(c.bat.ts)+'</span></div>'):'')+
     (cc?ctlPanel(i):'')+
@@ -559,17 +559,32 @@ function enablePush(){var b=$('pushbtn');b.disabled=true;
 
 /* controles do carro */
 var CTL={};
-function ctlPanel(i){var s=CTL[i]||(CTL[i]={temp:22,fan:3});var b=function(cmd,n,t,cls){return '<button class="cb'+(cls?' '+cls:'')+'" onclick="ctl('+i+',\\''+cmd+'\\','+(n==null?'null':n)+')">'+t+'</button>';};
- return '<div class="ctl"><div class="ctlh">🎛 Controles</div>'+
-  '<div class="cg">'+b('ac_on',null,'🚗 Ligar o carro','cp')+b('ac_off',null,'⏹ Desligar')+'</div>'+
+function acOf(i){var c=CARS[i];return (c&&c.ac)||null;}
+function ctlState(i){var s=CTL[i];if(!s){s=CTL[i]={temp:22,fan:3,on:false,touched:0};}
+ var a=acOf(i);if(a&&Date.now()-s.touched>3000){if(a.temp!=null)s.temp=a.temp;if(a.fan!=null)s.fan=a.fan;if(a.on!=null)s.on=a.on;}
+ return s;}
+function ctlPanel(i){var s=ctlState(i);
+ var b=function(cmd,n,t,cls){return '<button class="cb'+(cls?' '+cls:'')+'" onclick="ctl('+i+',\\''+cmd+'\\','+(n==null?'null':n)+')">'+t+'</button>';};
+ return '<div class="ctl"><div class="ctlh">❄ Ar-condicionado</div>'+
+  '<div class="cg">'+
+    '<button class="cb'+(s.on?' cp':'')+'" id="ac-on-'+i+'" onclick="ctl('+i+',\\'ac_on\\',null)">🟢 Ligar ar</button>'+
+    '<button class="cb'+(!s.on?' cp':'')+'" id="ac-off-'+i+'" onclick="ctl('+i+',\\'ac_off\\',null)">⏹ Desligar ar</button>'+
+  '</div>'+
   '<div class="cr"><span>🌡 Temperatura</span><span class="st">'+b('temp',-1,'−')+'<b id="ct-'+i+'">'+s.temp+' °C</b>'+b('temp',1,'+')+'</span></div>'+
-  '<div class="cr"><span>🌀 Ventilação</span><span class="st">'+b('fan',-1,'−')+'<b id="cf-'+i+'">'+s.fan+'</b>'+b('fan',1,'+')+'</span></div>'+
+  '<div class="cr"><span>🌀 Velocidade</span><span class="st">'+b('fan',-1,'−')+'<b id="cf-'+i+'">'+s.fan+'</b>'+b('fan',1,'+')+'</span></div>'+
+  '<div class="ctlh" style="margin-top:14px">🎛 Comandos do veículo</div>'+
+  '<div class="cg">'+b('car_on',null,'🚗 Ligar veículo')+b('car_off',null,'⏻ Desligar veículo')+'</div>'+
   '<div class="cg">'+b('lock',null,'🔒 Trancar')+b('unlock',null,'🔓 Destrancar')+'</div>'+
   '<div class="cg">'+b('flash',null,'💡 Piscar')+b('find',null,'📣 Achar o carro')+'</div>'+
   '<div class="cg">'+b('win',1,'⬇ Abrir janelas')+b('win',2,'⬆ Fechar janelas')+'</div>'+
   '<div class="dot" id="cs-'+i+'" style="min-height:18px;margin-top:6px"></div></div>';}
-var CTLN={ac_on:'Ligando o carro (ar)',ac_off:'Desligando',temp:'Ajustando a temperatura',fan:'Ajustando a ventilação',lock:'Trancando',unlock:'Destrancando',flash:'Piscando os faróis',find:'Piscando e buzinando',win:'Movendo as janelas'};
-function ctl(i,cmd,n){var c=CARS[i],s=CTL[i];if(!c||!s)return;var st=$('cs-'+i);
+function applyAc(i,ac){if(!ac)return;var c=CARS[i];if(c)c.ac=ac;var s=CTL[i];if(!s)s=ctlState(i);if(Date.now()-s.touched<3000)return;
+ if(ac.temp!=null){s.temp=ac.temp;var e=$('ct-'+i);if(e)e.textContent=ac.temp+' °C';}
+ if(ac.fan!=null){s.fan=ac.fan;var f=$('cf-'+i);if(f)f.textContent=ac.fan;}
+ if(ac.on!=null){s.on=!!ac.on;var on=$('ac-on-'+i),off=$('ac-off-'+i);if(on)on.classList.toggle('cp',s.on);if(off)off.classList.toggle('cp',!s.on);}}
+var CTLN={ac_on:'Ligando o ar',ac_off:'Desligando o ar',car_on:'Ligando o veículo',car_off:'Desligando o veículo',temp:'Ajustando a temperatura',fan:'Ajustando a velocidade',lock:'Trancando',unlock:'Destrancando',flash:'Piscando os faróis',find:'Piscando e buzinando',win:'Movendo as janelas'};
+function ctl(i,cmd,n){var c=CARS[i],s=ctlState(i);if(!c)return;var st=$('cs-'+i);s.touched=Date.now();
+ if(cmd==='ac_on'||cmd==='ac_off'){s.on=(cmd==='ac_on');var on=$('ac-on-'+i),off=$('ac-off-'+i);if(on)on.classList.toggle('cp',s.on);if(off)off.classList.toggle('cp',!s.on);}
  if(cmd==='temp'){s.temp=Math.max(17,Math.min(33,s.temp+n));n=s.temp;$('ct-'+i).textContent=n+' °C';}
  if(cmd==='fan'){s.fan=Math.max(1,Math.min(7,s.fan+n));n=s.fan;$('cf-'+i).textContent=n;}
  if(cmd==='win'&&n===1&&!confirm('Abrir as janelas do carro?'))return;
@@ -581,9 +596,16 @@ function ctl(i,cmd,n){var c=CARS[i],s=CTL[i];if(!c||!s)return;var st=$('cs-'+i);
   ws.onmessage=function(e){var m;try{m=JSON.parse(e.data);}catch(x){return;}
    if(m.t==='hello'){if(!m.online)end('✕ O carro está desligado da internet agora.',false);else ws.send(JSON.stringify({t:'ctl',cmd:cmd,n:n}));}
    else if(m.t==='ctlres')end(m.ok?'✓ Feito':'✕ '+(m.msg||'Não funcionou neste carro'),m.ok);
+   else if(m.t==='ac'){applyAc(i,m);}
    else if(m.t==='offline')end('✕ O carro está desligado da internet agora.',false);};
   ws.onerror=function(){end('✕ Sem conexão com o servidor.',false);};
  },(cmd==='temp'||cmd==='fan')?700:0);}
+var HOMEPOLL=null;
+function startHomePoll(){stopHomePoll();HOMEPOLL=setInterval(refreshState,5000);}
+function stopHomePoll(){if(HOMEPOLL){clearInterval(HOMEPOLL);HOMEPOLL=null;}}
+function refreshState(){if(!T||document.hidden||!CARS.length)return;api('/c/api/me').then(function(r){(r.cars||[]).forEach(function(c){var i=-1;for(var k=0;k<CARS.length;k++){if(CARS[k].id===c.id){i=k;break;}}if(i<0)return;
+ var cn=$('conn-'+i);if(cn)cn.innerHTML=c.online?'<span class="on">● Online agora</span>':'<span class="off">○ Desligado ou sem internet · último contato '+ago(c.seen)+'</span>';
+ if(c.ac)applyAc(i,c.ac);});}).catch(function(){});}
 
 /* bateria (telemetria) */
 function nb(v,d){return v==null?'—':Number(v).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});}
@@ -617,6 +639,7 @@ function startLive(i){var c=CARS[i];if(!c)return;var L={i:i,done:false,ice:[]};L
   else if(m.t==='online'){if(!L.pc){ov(i,'O carro conectou. Ligando a câmera…');start();}}
   else if(m.t==='offline'){dropPc(L);ov(i,'O carro desconectou (desligado ou sem internet). Esperando ele voltar…');}
   else if(m.t==='offer'){L.got=true;clearTimeout(L.wd);onOffer(L,m.sdp);}
+  else if(m.t==='ac'){applyAc(i,m);}
   else if(m.t==='micretry'){AUTOMIC={i:i,tries:(AUTOMIC&&AUTOMIC.i===i?AUTOMIC.tries:0)+1};$('inf-'+i).textContent='🎤 Ajustando o microfone deste carro…';if(AUTOMIC.tries<=7){stopLive();setTimeout(function(){startLive(i);},1500);}else{AUTOMIC=null;micUi(i,false);}}
   else if(m.t==='mic'){if(!m.ok){L.mic=false;AUTOMIC=null;var vv=$('vid-'+i);if(vv)vv.muted=true;micUi(i,false);$('inf-'+i).textContent='🎤 Microfone: '+(m.msg||'não funcionou neste carro');}else{AUTOMIC=null;micUi(i,m.on);$('inf-'+i).textContent='';}}
   else if(m.t==='info'){L.cam=m.cam;$('inf-'+i).textContent=DIAG?('Câmera: '+(m.cam||'?')+(m.real&&m.real!==m.cam?(' ('+m.real+')'):'')+(m.w?(' · '+m.w+'×'+m.h):'')+(m.def?(' · padrão da câmera '+m.def):'')):('📷 '+camName(m.cam||''));

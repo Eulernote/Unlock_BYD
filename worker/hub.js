@@ -111,7 +111,7 @@ export class CarHub {
 
   async fetch(request){
     const url = new URL(request.url);
-    if(url.pathname === '/status') return Response.json({online: !!this.car(), viewers: this.viewers().length, bat: this.lastTele(), vig: (await this.ctx.storage.get('vig')) || null});
+    if(url.pathname === '/status') return Response.json({online: !!this.car(), viewers: this.viewers().length, bat: this.lastTele(), vig: (await this.ctx.storage.get('vig')) || null, ac: (await this.ctx.storage.get('ac')) || null});
     if(url.pathname === '/tele'){
       const h = Math.min(24 * 30, Math.max(1, Number(url.searchParams.get('h')) || 24));
       let rows = [];
@@ -153,6 +153,7 @@ export class CarHub {
 
     if(a.role === 'car'){
       if(m && m.t === 'tele'){ try{ this.saveTele(m); }catch(e){} return; }
+      if(m && m.t === 'ac'){ try{ this.ctx.storage.put('ac', {on: m.on, temp: m.temp, fan: m.fan, ts: Date.now()}); }catch(e){} for(const v of this.viewers()) send(v, m); return; }
       // carro → celular específico
       if(!m || !m.v) return;
       for(const v of this.ctx.getWebSockets('v:' + m.v)) send(v, m);
