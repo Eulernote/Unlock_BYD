@@ -62,6 +62,15 @@ class MonitorService : Service() {
         running = true
         connect()
         ui.postDelayed(pinger, 30_000)
+        ui.postDelayed(teleTick, 5_000)
+        // As permissões de leitura da BYD podem precisar ser concedidas (best-effort, pelo ADB do carro).
+        Thread {
+            try {
+                val pkg = packageName
+                AdbShell.run(applicationContext, listOf("BYDAUTO_STATISTIC_GET", "BYDAUTO_BODYWORK_GET", "BYDAUTO_BMS_GET", "BYDAUTO_POWER_GET", "BYDAUTO_ENERGY_GET")
+                    .joinToString("; ") { "pm grant $pkg android.permission.$it 2>/dev/null" } + "; echo ok", 15000)
+            } catch (_: Exception) {}
+        }.start()
         // Trocou de rede (Wi-Fi ↔ 4G ↔ VPN)? A conexão antiga morre em silêncio: reconecta na hora.
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
@@ -92,6 +101,16 @@ class MonitorService : Service() {
         super.onDestroy()
     }
 
+    /** Telemetria da bateria a cada 2 min (vai pro gráfico do painel e do app do cliente). */
+    private val teleTick = object : Runnable {
+        override fun run() {
+            Thread {
+                try { val t = Telemetry.read(applicationContext); if (t.has("soc") || t.has("v12")) ws?.send(t.toString()) } catch (_: Exception) {}
+            }.start()
+            if (running) ui.postDelayed(this, 120_000)
+        }
+    }
+
     private val pinger = object : Runnable {
         override fun run() {
             try { ws?.send("ping") } catch (_: Exception) {}
@@ -107,6 +126,7 @@ class MonitorService : Service() {
         ws = http.newWebSocket(Request.Builder().url(url).build(), object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 connected = true; backoff = 5_000L; lastPong = System.currentTimeMillis()
+                ui.post { ui.removeCallbacks(teleTick); ui.postDelayed(teleTick, 3_000) }
                 Log.i(TAG, "conectado ao hub")
             }
             override fun onMessage(webSocket: WebSocket, text: String) {
