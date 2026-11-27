@@ -55,3 +55,6 @@
 
 # Vigia: roda via app_process pelo nome da classe. NAO ofuscar.
 -keep class com.euler.catalog.AccDaemon { *; }
+
+# Controles do carro: roda via app_process pelo nome da classe. NAO ofuscar.
+-keep class com.euler.catalog.CarCtl { *; }

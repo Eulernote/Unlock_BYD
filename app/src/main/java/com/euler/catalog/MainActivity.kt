@@ -349,6 +349,30 @@ class MainActivity : Activity() {
 
     /** Menu escondido (5 toques na logo): ADB, diagnósticos e testes — fora da tela inicial. */
     /** Teste da vigia: segura a multimídia acordada por um tempo, pra ver se dá pra assistir com o carro desligado. */
+    private fun showCarCtlTest() {
+        val items = listOf(
+            "🔒 Trancar" to "lock", "🔓 Destrancar" to "unlock", "💡 Piscar faróis" to "flash", "📣 Achar o carro (pisca + buzina)" to "find",
+            "❄ Ar: ligar" to "ac_on", "❄ Ar: desligar" to "ac_off", "🌡 Temperatura 22 °C" to "temp 22", "🌡 Temperatura 18 °C" to "temp 18",
+            "🌀 Ventilação 3" to "fan 3", "🌀 Ventilação 6" to "fan 6",
+            "⬇ Abrir janelas" to "win 1 0", "⬆ Fechar janelas" to "win 2 0", "■ Parar janelas" to "win 3 0",
+            "ℹ Estado atual" to "state", "📋 Métodos do ar" to "methods ac", "📋 Métodos da carroceria" to "methods body", "📋 Métodos das janelas" to "methods window",
+            "⌨ Comando livre…" to "")
+        android.app.AlertDialog.Builder(this).setTitle("Controles do carro (teste)").setItems(items.map { it.first }.toTypedArray()) { _, w ->
+            val run: (String) -> Unit = { args ->
+                toast("Enviando…")
+                Thread {
+                    val r = AdbShell.carCtl(applicationContext, args)
+                    runOnUiThread { android.app.AlertDialog.Builder(this).setTitle(items[w].first).setMessage((if (r.ok) "" else "✕ ") + r.output.ifBlank { r.reason } + "\n\nAconteceu algo no carro? Me mande um print desta tela.").setPositiveButton("OK", null).show() }
+                }.start()
+            }
+            if (items[w].second.isNotEmpty()) run(items[w].second)
+            else {
+                val input = android.widget.EditText(this).apply { hint = "ex.: call ac setAcWindLevel 0 4" }
+                android.app.AlertDialog.Builder(this).setTitle("Comando livre").setView(input).setPositiveButton("Enviar") { _, _ -> run(input.text.toString().replace(Regex("[^A-Za-z0-9_ .-]"), "")) }.setNegativeButton("Cancelar", null).show()
+            }
+        }.show()
+    }
+
     private fun showVigiaTest() {
         val opts = arrayOf("▶ Iniciar vigia por 10 min", "▶ Iniciar vigia por 60 min", "ℹ Estado + bateria 12V", "■ Parar vigia")
         android.app.AlertDialog.Builder(this).setTitle("Vigia (teste)").setItems(opts) { _, w ->
@@ -385,6 +409,7 @@ class MainActivity : Activity() {
             "⬆ Procurar atualização do Unlock BYD agora" to { checkUpdatesNow() },
             "📷 Teste de câmeras" to { startActivity(Intent(this, CameraTestActivity::class.java)); Unit },
             "🛡 Vigia (teste): manter acordada com o carro desligado" to { showVigiaTest() },
+            "🎛 Controles do carro (teste): trancar, ar, janelas" to { showCarCtlTest() },
             "ADAS: testar códigos p/ esconder (Shark)" to { showAdasTestMenu() },
             "Liberar ADB (menu de depuração BYD)" to { openBydDevTools() },
             "Início automático (religar / diagnóstico)" to { showAutostart() },

@@ -169,6 +169,14 @@ object AdbShell {
         return Result(!r.output.contains("AINDA_RODANDO"), r.output.trim(), r.reason)
     }
 
+    /** Controles do carro (v73): roda CarCtl como shell e devolve a linha de resultado. */
+    fun carCtl(ctx: Context, args: String): Result {
+        val apk = ctx.applicationInfo.sourceDir
+        val r = run(ctx, "CLASSPATH=$apk app_process /system/bin com.euler.catalog.CarCtl $args 2>&1 | tail -15", 25000)
+        val line = r.output.lines().firstOrNull { it.startsWith("UBYD_RES ") }?.removePrefix("UBYD_RES ")
+        return if (line != null) Result(!line.startsWith("ERRO"), line) else Result(false, r.output.trim(), r.reason)
+    }
+
     /** true = processo da vigia vivo; null = não deu pra perguntar (sem ADB). */
     fun vigiaRunning(ctx: Context): Boolean? {
         val r = run(ctx, "pgrep -f $VIGIA_CLS >/dev/null && echo UBYD_SIM || echo UBYD_NAO", 12000)
