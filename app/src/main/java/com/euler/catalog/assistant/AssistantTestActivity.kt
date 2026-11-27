@@ -37,6 +37,7 @@ class AssistantTestActivity : Activity() {
         super.onCreate(savedInstanceState)
         exec = AssistantExecutor(this)
         speaker = Speaker(this)
+        AppCatalog.init() // carrega o catálogo real da loja (nomes + pacotes) em segundo plano
         val pad = (16 * resources.displayMetrics.density).toInt()
 
         val root = LinearLayout(this).apply {

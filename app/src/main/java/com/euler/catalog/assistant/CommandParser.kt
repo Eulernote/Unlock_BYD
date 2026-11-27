@@ -36,18 +36,6 @@ data class Action(
 
 object CommandParser {
 
-    /** Catálogo mínimo; no app real vem da biblioteca de apps do painel. */
-    val catalogo: Map<String, String> = linkedMapOf(
-        "youtube music" to "com.google.android.apps.youtube.music",
-        "youtube" to "com.google.android.youtube",
-        "waze" to "com.waze",
-        "spotify" to "com.spotify.music",
-        "netflix" to "com.netflix.mediaclient",
-        "whatsapp" to "com.whatsapp",
-        "radarbot" to "com.vialsoft.radarbot_free",
-        "veloplay" to "com.veloplay.app"
-    )
-
     val remoteKey = mapOf(
         "ligar_carro" to 1, "desligar_carro" to 9,
         "travar" to 7, "destravar" to 5, "porta_malas" to 10, "pisca" to 22
@@ -76,12 +64,8 @@ object CommandParser {
         return null
     }
 
-    private fun acharApp(t: String): Pair<String, String>? {
-        for (nome in catalogo.keys.sortedByDescending { it.length }) {
-            if (Regex("\\b" + Regex.escape(nome) + "\\b").containsMatchIn(t)) return nome to catalogo.getValue(nome)
-        }
-        return null
-    }
+    // Resolve nome falado -> (nome, pacote) usando o catálogo real da loja (AppCatalog).
+    private fun acharApp(t: String): Pair<String, String>? = AppCatalog.findInText(t)
 
     private fun depoisDe(t: String, gatilhos: List<String>): String? {
         for (g in gatilhos) {
@@ -183,9 +167,13 @@ object CommandParser {
                         else -> "spotify"
                     }
                     return if (servico == "youtube")
-                        Action(ActionType.MEDIA, "Abrindo o YouTube com $q.", pkg = catalogo["youtube"], query = q, note = "busca YouTube")
+                        Action(ActionType.MEDIA, "Abrindo o YouTube com $q.",
+                            pkg = AppCatalog.resolve("youtube") ?: "app.revanced.android.youtube",
+                            query = q, note = "busca YouTube")
                     else
-                        Action(ActionType.MEDIA, "Tocando $q no Spotify.", pkg = catalogo["spotify"], query = q, note = "Spotify search+play")
+                        Action(ActionType.MEDIA, "Tocando $q no Spotify.",
+                            pkg = AppCatalog.resolve("spotify") ?: "com.spotify.music",
+                            query = q, note = "Spotify search+play")
                 }
             }
         }

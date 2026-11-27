@@ -67,9 +67,9 @@ class AssistantExecutor(private val ctx: Context) {
             }
             try { ctx.startActivity(i); return } catch (_: Exception) {}
         }
-        // YouTube (ou fallback): busca
+        // YouTube (ou fallback): busca — pacote da loja é o ReVanced
         val yt = Intent(Intent.ACTION_SEARCH).apply {
-            `package` = pkg ?: "com.google.android.youtube"
+            `package` = pkg ?: "app.revanced.android.youtube"
             putExtra("query", query)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
