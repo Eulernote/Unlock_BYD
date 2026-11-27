@@ -79,6 +79,17 @@ object LiveCam {
     @Volatile private var appCtx: Context? = null
     @Volatile private var micErr = ""
     @Volatile private var micRec = false
+    // Combinações de fonte/taxa do microfone: o carro testa uma a uma até achar a que grava, e guarda a boa.
+    private val AUDIO_CFGS = listOf(
+        6 to 0, 1 to 0, 5 to 0, 7 to 0, 6 to 16000, 1 to 16000, 0 to 0   // 6=VOICE_RECOGNITION 1=MIC 5=CAMCORDER 7=VOICE_COMMUNICATION 0=DEFAULT · 0=taxa nativa
+    )
+    @Volatile private var audioIdx = -1
+    @Volatile private var micAttempts = 0
+    private fun loadAudioIdx(ctx: Context): Int {
+        if (audioIdx < 0) audioIdx = ctx.getSharedPreferences("livecam", Context.MODE_PRIVATE).getInt("audiocfg", 0).coerceIn(0, AUDIO_CFGS.size - 1)
+        return audioIdx
+    }
+    private fun saveAudioIdx(ctx: Context) { try { ctx.getSharedPreferences("livecam", Context.MODE_PRIVATE).edit().putInt("audiocfg", audioIdx).apply() } catch (_: Throwable) {} }
     private val peers = HashMap<String, Peer>()
     private val timeouts = HashMap<String, Runnable>()
 
@@ -157,10 +168,10 @@ object LiveCam {
                 tr.sender.setTrack(t, false); t.setEnabled(true); p.mic = true
                 adm?.setMicrophoneMute(false)
                 try { p.pc.setAudioRecording(true) } catch (_: Throwable) {}
-                // Confere em 2 s se o microfone realmente começou a gravar; se não, avisa o celular com o motivo.
+                // Confere em 2 s se o microfone realmente começou a gravar; se não, testa a próxima combinação.
                 main.postDelayed({ exec.execute {
-                    if (peers[v]?.mic == true && (!micRec || micErr.isNotEmpty()))
-                        p.send(JSONObject().put("t", "mic").put("v", v).put("on", true).put("ok", false).put("msg", if (micErr.isNotEmpty()) micErr else "o microfone não começou a gravar"))
+                    if (peers[v]?.mic == true && (!micRec || micErr.isNotEmpty())) micFailed(v, if (micErr.isNotEmpty()) micErr else "o microfone não começou a gravar")
+                    else if (peers[v]?.mic == true) { micAttempts = 0; appCtx?.let { saveAudioIdx(it) } } // funcionou: guarda a combinação boa
                 } }, 2500)
             } else {
                 tr.sender.setTrack(null, false); p.mic = false
@@ -170,7 +181,24 @@ object LiveCam {
             p.send(JSONObject().put("t", "mic").put("v", v).put("on", p.mic).put("ok", true))
         } catch (t: Throwable) {
             Log.e(TAG, "mic", t)
-            p.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", msgOf(t)))
+            micFailed(v, msgOf(t))
+        }
+    }
+
+    /** Microfone falhou: tenta a próxima combinação (reinicia a transmissão) ou desiste depois de testar todas. */
+    private fun micFailed(v: String, reason: String) {
+        val ctx = appCtx
+        val p = peers[v]
+        if (ctx != null && micAttempts < AUDIO_CFGS.size - 1) {
+            micAttempts++
+            audioIdx = (loadAudioIdx(ctx) + 1) % AUDIO_CFGS.size
+            saveAudioIdx(ctx)
+            Log.i(TAG, "mic: testando combinação $audioIdx (motivo: $reason)")
+            p?.send(JSONObject().put("t", "micretry").put("v", v))
+            main.postDelayed({ exec.execute { try { rebuildFactoryForAudio(ctx) } catch (_: Throwable) {} } }, 300)
+        } else {
+            micAttempts = 0
+            p?.send(JSONObject().put("t", "mic").put("v", v).put("on", false).put("ok", false).put("msg", "não consegui o microfone neste carro ($reason)"))
         }
     }
 
@@ -244,10 +272,11 @@ object LiveCam {
         val e = EglBase.create(); egl = e
         appCtx = ctx
         // Microfone: fonte MIC (o "VOICE_COMMUNICATION" pode ser desviado pela central de mídia do carro).
+        val cfg = AUDIO_CFGS[loadAudioIdx(ctx)]
         val a = try {
             org.webrtc.audio.JavaAudioDeviceModule.builder(ctx)
-                .setAudioSource(android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION)   // igual ao Sentry (fonte 6, 48 kHz)
-                .setInputSampleRate(48000)
+                .setAudioSource(cfg.first)
+                .apply { if (cfg.second > 0) setInputSampleRate(cfg.second) }
                 .setUseHardwareAcousticEchoCanceler(false).setUseHardwareNoiseSuppressor(false)
                 .setAudioRecordErrorCallback(object : org.webrtc.audio.JavaAudioDeviceModule.AudioRecordErrorCallback {
                     override fun onWebRtcAudioRecordInitError(m: String?) { micErr = "init: $m" }
@@ -265,6 +294,17 @@ object LiveCam {
             .setVideoEncoderFactory(DefaultVideoEncoderFactory(e.eglBaseContext, true, false))
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(e.eglBaseContext))
             .createPeerConnectionFactory()
+    }
+
+    /** Troca a combinação de áudio e recria a fábrica (os vídeos são refeitos pelo reinício automático no celular). */
+    private fun rebuildFactoryForAudio(ctx: Context) {
+        for (k in peers.keys.toList()) stopPeer(k, closeCamIfIdle = false)
+        closeCamera()
+        try { releaseAudio() } catch (_: Throwable) {}
+        try { adm?.release() } catch (_: Throwable) {}
+        try { factory?.dispose() } catch (_: Throwable) {}
+        adm = null; factory = null
+        ensureFactory(ctx)
     }
 
     private fun createPeer(v: String, ice: JSONArray?, codec: String, send: (JSONObject) -> Unit): PeerConnection? {
