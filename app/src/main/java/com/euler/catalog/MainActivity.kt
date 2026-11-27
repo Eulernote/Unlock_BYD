@@ -355,7 +355,7 @@ class MainActivity : Activity() {
             "❄ Ar: ligar" to "ac_on", "❄ Ar: desligar" to "ac_off", "🌡 Temperatura 22 °C" to "temp 22", "🌡 Temperatura 18 °C" to "temp 18",
             "🌀 Ventilação 3" to "fan 3", "🌀 Ventilação 6" to "fan 6",
             "⬇ Abrir janelas" to "win 1 0", "⬆ Fechar janelas" to "win 2 0", "■ Parar janelas" to "win 3 0",
-            "🛡 Sentinela BYD: ligar" to "sentry 1", "🛡 Sentinela BYD: desligar" to "sentry 0", "🔎 Diagnóstico (bateria / ACC)" to "diag",
+            "🛡 Sentinela BYD: ligar" to "sentry 1", "🛡 Sentinela BYD: desligar" to "sentry 0", "🔎 Diagnóstico (bateria / ACC)" to "diag", "⚡ Acordar módulo de energia (como o Electro)" to "wake",
             "ℹ Estado atual" to "state", "📋 Métodos do ar" to "methods ac", "📋 Métodos da carroceria" to "methods body", "📋 Métodos das janelas" to "methods window",
             "⌨ Comando livre…" to "")
         android.app.AlertDialog.Builder(this).setTitle("Controles do carro (teste)").setItems(items.map { it.first }.toTypedArray()) { _, w ->

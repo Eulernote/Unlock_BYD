@@ -163,6 +163,7 @@ object CarCtl {
             }
             "sentry" -> sentry(ctx, (ints.firstOrNull() ?: 1) != 0)
             "diag" -> diag(ctx)
+            "wake" -> { val pw = dev(ctx, "power"); call(pw, "wakeUpMcu") + " · " + call(pw, "getBatteryRemainPowerEV").substringAfter("=") + " restante" }
             "call" -> call(dev(ctx, a.getOrNull(0) ?: ""), a.getOrNull(1) ?: "", *a.drop(2).mapNotNull { it.toIntOrNull() }.toIntArray())
             "buf" -> buf(ctx, ints.firstOrNull() ?: 22)
             else -> "comandos: lock unlock flash find ac_on ac_off temp N fan N win C [área] state methods <ac|body|window|lock|power> call <aparelho> <método> ints... buf N"
