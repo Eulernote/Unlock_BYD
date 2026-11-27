@@ -21,6 +21,18 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      - name: Baixar modelo de voz (Vosk pt-BR) e embutir em assets
+        run: |
+          set -e
+          curl -fsSL -o /tmp/vosk-pt.zip "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip" \
+            || curl -fsSL -o /tmp/vosk-pt.zip "https://huggingface.co/rhasspy/vosk-models/resolve/main/pt/vosk-model-small-pt-0.3.zip"
+          mkdir -p /tmp/vosk-x
+          unzip -q /tmp/vosk-pt.zip -d /tmp/vosk-x
+          rm -rf app/src/main/assets/model-pt
+          mkdir -p app/src/main/assets
+          mv /tmp/vosk-x/vosk-model-small-pt-0.3 app/src/main/assets/model-pt
+          echo "modelo embutido em assets/model-pt:"; ls -la app/src/main/assets/model-pt
+
       - name: Build debug APK
         run: |
           ./gradlew assembleDebug --no-daemon --stacktrace

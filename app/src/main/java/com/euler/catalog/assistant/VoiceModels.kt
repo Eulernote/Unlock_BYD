@@ -1,95 +1,63 @@
 package com.euler.catalog.assistant
 
 import android.content.Context
-import android.util.Log
-import org.json.JSONObject
 import java.io.File
-import java.net.HttpURLConnection
-import java.net.URL
+import java.io.FileOutputStream
 
 /**
- * Baixa os modelos de voz (ouvir) para o carro, a partir de um MANIFESTO no R2.
+ * Modelo de voz do "Hey Up" (Vosk, pt-BR).
  *
- * O app não embute os modelos (decisão: baixar do R2 na 1ª vez). Em vez de fixar URLs
- * no código, ele lê um JSON de manifesto — assim dá pra trocar/ajustar os modelos sem
- * recompilar o app, só editando o arquivo no R2.
- *
- * Formato do manifesto (voice/manifest.json no R2):
- * {
- *   "files": [
- *     { "url": "https://.../silero_vad.onnx",        "path": "vad/silero_vad.onnx" },
- *     { "url": "https://.../kws-encoder.onnx",        "path": "kws/encoder.onnx" },
- *     { "url": "https://.../kws-decoder.onnx",        "path": "kws/decoder.onnx" },
- *     { "url": "https://.../kws-joiner.onnx",         "path": "kws/joiner.onnx" },
- *     { "url": "https://.../kws-tokens.txt",          "path": "kws/tokens.txt" },
- *     { "url": "https://.../whisper-encoder.onnx",    "path": "asr/encoder.onnx" },
- *     { "url": "https://.../whisper-decoder.onnx",    "path": "asr/decoder.onnx" },
- *     { "url": "https://.../whisper-tokens.txt",      "path": "asr/tokens.txt" }
- *   ]
- * }
+ * O modelo (vosk-model-small-pt-0.3) vem EMBUTIDO no APK em assets/model-pt (o CI baixa e
+ * descompacta antes de compilar). Aqui a gente só copia de assets para o armazenamento interno
+ * na 1ª vez (o Vosk precisa ler os arquivos por caminho de arquivo, não dá para ler de assets
+ * comprimido). Não há download pela rede — funciona offline desde a 1ª vez.
  */
 object VoiceModels {
+    private const val ASSET_DIR = "model-pt"
 
-    private const val TAG = "VoiceModels"
+    fun modelDir(ctx: Context): File = File(ctx.filesDir, "vosk-model-pt")
 
-    // Base do worker (mesmo host do catálogo/APK). O manifesto fica em /f/voice/manifest.json.
-    const val MANIFEST_URL =
-        "https://euler-catalog.eulerfilhogontijodamata.workers.dev/f/voice/manifest.json"
-
-    fun voiceDir(ctx: Context): File = File(ctx.filesDir, "voice").apply { mkdirs() }
-
-    fun path(ctx: Context, rel: String): String = File(voiceDir(ctx), rel).absolutePath
-
-    /** true se os arquivos essenciais já estão no disco (não precisa baixar de novo). */
+    /** true quando o modelo já está copiado para o armazenamento interno. */
     fun isReady(ctx: Context): Boolean {
-        val d = voiceDir(ctx)
-        val essenciais = listOf(
-            "vad/silero_vad.onnx",
-            "kws/encoder.onnx", "kws/decoder.onnx", "kws/joiner.onnx", "kws/tokens.txt", "kws/keywords.txt",
-            "asr/encoder.onnx", "asr/decoder.onnx", "asr/tokens.txt"
-        )
-        return essenciais.all { File(d, it).exists() && File(d, it).length() > 0 }
+        val d = modelDir(ctx)
+        return File(d, "am/final.mdl").exists() || File(d, "conf/model.conf").exists()
     }
 
-    /** Baixa tudo do manifesto. Chamar em thread de fundo. onProgress recebe texto de status. */
-    fun download(ctx: Context, onProgress: (String) -> Unit): Boolean {
+    /**
+     * Garante o modelo pronto. Mantém o nome "download" porque a tela de teste chama assim,
+     * mas aqui é só cópia local de assets -> filesDir (rápido, sem rede).
+     */
+    fun download(ctx: Context, progress: (String) -> Unit): Boolean {
+        if (isReady(ctx)) { progress("Modelo de voz pronto."); return true }
         return try {
-            onProgress("Lendo manifesto…")
-            val manifest = httpGet(MANIFEST_URL)
-            val files = JSONObject(manifest).getJSONArray("files")
-            for (i in 0 until files.length()) {
-                val o = files.getJSONObject(i)
-                val url = o.getString("url")
-                val rel = o.getString("path")
-                val dest = File(voiceDir(ctx), rel)
-                if (dest.exists() && dest.length() > 0) continue
-                onProgress("Baixando ${rel} (${i + 1}/${files.length()})…")
-                dest.parentFile?.mkdirs()
-                downloadFile(url, dest)
-            }
-            onProgress("Modelos prontos.")
-            isReady(ctx)
+            progress("Preparando o modelo de voz (1ª vez)...")
+            CrashLog.stage(ctx, "voz: copiando modelo de assets")
+            val dest = modelDir(ctx)
+            // limpa resto de cópia incompleta
+            if (dest.exists()) dest.deleteRecursively()
+            copyAsset(ctx, ASSET_DIR, dest)
+            val ok = isReady(ctx)
+            progress(if (ok) "Modelo de voz pronto." else "Falha ao preparar o modelo.")
+            CrashLog.stage(ctx, "voz: modelo copiado (ok=$ok)")
+            ok
         } catch (e: Throwable) {
-            Log.w(TAG, "download falhou: ${e.message}")
-            onProgress("Falha ao baixar modelos: ${e.message}")
+            CrashLog.write(ctx, "modelo", e)
+            progress("Erro ao preparar o modelo: ${e.message}")
             false
         }
     }
 
-    private fun httpGet(url: String): String {
-        val c = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15000; readTimeout = 20000
+    /** Copia recursivamente uma pasta (ou arquivo) de assets para o destino em filesDir. */
+    private fun copyAsset(ctx: Context, assetPath: String, dest: File) {
+        val am = ctx.assets
+        val children = try { am.list(assetPath) } catch (_: Throwable) { null }
+        if (children.isNullOrEmpty()) {
+            // é arquivo
+            dest.parentFile?.mkdirs()
+            am.open(assetPath).use { input -> FileOutputStream(dest).use { out -> input.copyTo(out) } }
+        } else {
+            dest.mkdirs()
+            for (c in children) copyAsset(ctx, "$assetPath/$c", File(dest, c))
         }
-        return c.inputStream.bufferedReader().use { it.readText() }.also { c.disconnect() }
-    }
-
-    private fun downloadFile(url: String, dest: File) {
-        val tmp = File(dest.absolutePath + ".part")
-        val c = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 20000; readTimeout = 60000
-        }
-        c.inputStream.use { input -> tmp.outputStream().use { out -> input.copyTo(out, 1 shl 16) } }
-        c.disconnect()
-        if (!tmp.renameTo(dest)) { tmp.copyTo(dest, overwrite = true); tmp.delete() }
     }
 }

@@ -61,3 +61,14 @@
 
 
 -keep class com.euler.catalog.MicShell { *; }
+
+# ---- Vosk (reconhecimento de voz offline, Kaldi): classes usadas via JNI/JNA. NAO ofuscar. ----
+-keep class org.vosk.** { *; }
+-dontwarn org.vosk.**
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-dontwarn com.sun.jna.**
+-dontwarn java.awt.**
+-dontwarn java.beans.**
+-dontwarn javax.swing.**
+-keepclassmembers class * { native <methods>; }
