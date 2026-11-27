@@ -23,8 +23,13 @@ android {
         // targetSdk 25 (v78): igual ao Electro e ao Overdrive — o firmware BYD só entrega as permissões
         // internas (ACC, bateria, ar) para apps nesse modo. Teste no Dolphin GS.
         targetSdk = 25
-        versionCode = 97
-        versionName = "10.4"
+        versionCode = 98
+        versionName = "10.5"
+
+        // Multimídias dos carros são arm64 — limita os .so nativos (sherpa-onnx) a essa ABI.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
         // WebRTC (câmeras ao vivo) traz bibliotecas nativas: só ARM (as multimídias são ARM), APK menor.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
@@ -66,6 +71,8 @@ dependencies {
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
     // Cliente ADB: shell no próprio carro via 127.0.0.1:5555 (Device Owner sem notebook, cluster).
     implementation("dev.mobile:dadb:1.2.10")
+    // Voz offline do assistente (reconhecimento, palavra de ativação, VAD) — modelos baixados do R2.
+    implementation("com.k2fsa.sherpa.onnx:sherpa-onnx-android:1.12.14")
     // Câmeras ao vivo (v60): WebRTC pré-compilado + WebSocket pro hub de sinalização.
     implementation("io.github.webrtc-sdk:android:114.5735.10")   // WebRTC puro (Java), sem dependência de Kotlin novo
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
