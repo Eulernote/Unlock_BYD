@@ -15,12 +15,12 @@ import java.nio.ByteOrder
 object MicShell {
     private val LOG = File("/data/local/tmp/ubyd_mic.log")
     private val SOURCES = intArrayOf(7, 6, 1, 5, 0)
-    private fun log(s: String) { try { LOG.appendText(s + "\n") } catch (_: Throwable) {} }
+    private fun log(s: String) { try { println("MIC " + s) } catch (_: Throwable) {}; try { LOG.appendText(s + "\n") } catch (_: Throwable) {} }
 
     @JvmStatic
     fun main(args: Array<String>) {
         try { LOG.delete() } catch (_: Throwable) {}
-        log("shell uid=${android.os.Process.myUid()}")
+        log("inicio uid=${android.os.Process.myUid()}")
         val rate = 48000
         val minBuf = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val bufSize = Math.max(minBuf * 4, 30720)
@@ -41,9 +41,10 @@ object MicShell {
             }
             log("fonte $src: estado=${rec.recordingState} bytes=$total pico=$maxAbs")
             try { rec.stop() } catch (_: Throwable) {}; rel(rec)
-            if (total > 0 && maxAbs > 30) { log("RESULTADO: shell GRAVA na fonte $src (pico $maxAbs)"); return }
+            if (total > 0 && maxAbs > 30) { log("RESULTADO: shell GRAVA na fonte $src (pico $maxAbs)"); System.out.flush(); return }
         }
         log("RESULTADO: nem o shell conseguiu gravar")
+        System.out.flush()
     }
     private fun rel(rec: AudioRecord) { try { rec.release() } catch (_: Throwable) {} }
 }
