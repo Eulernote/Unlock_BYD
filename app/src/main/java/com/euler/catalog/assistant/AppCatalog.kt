@@ -88,12 +88,76 @@ object AppCatalog {
     }
 
     /** Acha, dentro do texto do comando, o nome de app mais específico presente. */
+    // Sinônimos/categorias: palavra falada -> um "token" que costuma aparecer no nome do app.
+    private val sinonimos = linkedMapOf(
+        "equalizador" to "equaliz", "equalizacao" to "equaliz", "equalize" to "equaliz",
+        "jogos" to "emulad", "jogo" to "emulad", "games" to "emulad", "game" to "emulad",
+        "emulador" to "emulad", "emuladores" to "emulad", "emulators" to "emulad",
+        "radar" to "radar", "radares" to "radar",
+        "navegador" to "waze", "navegacao" to "waze", "gps" to "waze",
+        "yt" to "youtube", "video" to "youtube", "videos" to "youtube",
+        "loja" to "aurora", "lojinha" to "aurora"
+    )
+    // Palavras genéricas que NÃO devem casar sozinhas (evita falso positivo).
+    private val genericas = setOf(
+        "o","a","os","as","de","do","da","no","na","em","store","play","app","apps","tv",
+        "pro","free","mod","net","go","lite","plus","br","oficial","central","home","the","and","com"
+    )
+
+    private fun palavrasDoNome(nome: String) =
+        nome.split(" ", "-", "_", ".", "+").map { it.trim() }.filter { it.length >= 3 }
+
+    private fun levenshtein(a: String, b: String): Int {
+        val d = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            var prev = d[0]; d[0] = i
+            for (j in 1..b.length) {
+                val tmp = d[j]
+                d[j] = minOf(d[j] + 1, d[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
+                prev = tmp
+            }
+        }
+        return d[b.length]
+    }
+
+    /** Vocabulário (nomes + palavras dos nomes + sinônimos) para alimentar a gramática do Vosk. */
+    fun vocabulario(): Set<String> {
+        val s = linkedSetOf<String>()
+        try { mapa().keys.forEach { n -> s.add(n); palavrasDoNome(n).forEach { if (it !in genericas) s.add(it) } } } catch (_: Throwable) {}
+        s.addAll(sinonimos.keys)
+        return s
+    }
+
+    /**
+     * Acha o app citado na frase, tolerante a variações:
+     * 1) nome completo ("youtube music"); 2) palavra do nome ("aurora" -> Aurora Store,
+     * "sapo" -> Sapo Central); 3) sinônimo/categoria ("equalizador", "jogos", "vídeo");
+     * 4) aproximação por pronúncia (Levenshtein, p/ "radarbot" etc.).
+     */
     fun findInText(texto: String): Pair<String, String>? {
         val m = mapa()
-        // nomes mais longos primeiro, pra "youtube music" ganhar de "youtube"
+        val t = CommandParser.normalizar(texto)
+        val palavras = t.split(Regex("\\s+")).filter { it.isNotBlank() }
+        // 1) nome completo como frase (mais preciso), nomes mais longos primeiro
         for (nome in m.keys.sortedByDescending { it.length }) {
-            if (Regex("\\b" + Regex.escape(nome) + "\\b").containsMatchIn(texto)) {
-                return nome to m.getValue(nome)
+            if (Regex("\\b" + Regex.escape(nome) + "\\b").containsMatchIn(t)) return nome to m.getValue(nome)
+        }
+        // 2) palavra significativa do nome aparece na fala (pega a palavra casada mais longa)
+        var melhor: Pair<String, String>? = null; var melhorLen = 0
+        for ((nome, pkg) in m) for (w in palavrasDoNome(nome)) {
+            if (w in genericas) continue
+            if (palavras.any { it == w } && w.length > melhorLen) { melhor = nome to pkg; melhorLen = w.length }
+        }
+        if (melhor != null) return melhor
+        // 3) sinônimos: palavra falada -> token que deve estar no nome de algum app
+        for (p in palavras) sinonimos[p]?.let { token ->
+            for ((nome, pkg) in m) if (nome.contains(token)) return nome to pkg
+        }
+        // 4) aproximação por pronúncia (palavras com 5+ letras, distância <= 2)
+        for (p in palavras) {
+            if (p.length < 5 || p in genericas) continue
+            for ((nome, pkg) in m) for (w in palavrasDoNome(nome)) {
+                if (w.length >= 5 && levenshtein(p, w) <= 2) return nome to pkg
             }
         }
         return null

@@ -153,30 +153,34 @@ object CommandParser {
                 return Action(ActionType.WAZE, "Tracando rota pro $dest.", pkg = "com.waze", destination = dest)
         }
 
-        // 6. Mídia (Spotify / YouTube)
+        // 6. Mídia (Spotify / YouTube): tocar / procurar algo. Só se houver verbo de mídia E sobrar
+        //    uma busca real depois de tirar o nome do serviço e as palavras de comando — senão é
+        //    "abrir o app" (tratado na seção 9).
         val app = acharApp(t)
-        val ehServico = app?.first in listOf("spotify", "youtube", "youtube music")
-        if (ehServico || Regex("\\b(toca|tocar|coloca uma musica|poe uma musica)\\b").containsMatchIn(t)) {
-            val bruto = depoisDe(t, listOf("(?:toca|tocar|coloca|colocar|poe|bota|procura|pesquisa)", "(?:youtube|spotify)"))
-            if (bruto != null) {
-                val q = limparQuery(bruto)
-                if (q.isNotEmpty()) {
-                    val servico = when {
-                        app?.first?.startsWith("youtube") == true -> "youtube"
-                        app?.first == "spotify" -> "spotify"
-                        t.contains("youtube") -> "youtube"
-                        else -> "spotify"
-                    }
-                    return if (servico == "youtube")
-                        Action(ActionType.MEDIA, "Abrindo o YouTube com $q.",
-                            pkg = AppCatalog.resolve("youtube") ?: "app.revanced.android.youtube",
-                            query = q, note = "busca YouTube")
-                    else
-                        Action(ActionType.MEDIA, "Tocando $q no Spotify.",
-                            pkg = AppCatalog.resolve("spotify") ?: "com.spotify.music",
-                            query = q, note = "Spotify search+play")
-                }
+        val servico = when {
+            app?.first?.startsWith("youtube") == true -> "youtube"
+            app?.first == "spotify" -> "spotify"
+            t.contains("youtube") -> "youtube"
+            t.contains("spotify") -> "spotify"
+            else -> null
+        }
+        val verboMidia = Regex("\\b(toca|tocar|coloca|colocar|coloque|poe|poem|ponha|bota|botar|procura|procurar|pesquisa|pesquisar|busca|buscar|escuta|escutar|ouvir|roda|rodar)\\b").containsMatchIn(t)
+        if (servico != null && verboMidia) {
+            var q = t
+            q = q.replace(Regex("\\b(no|na|pro|pra|para|em|do|da)?\\s*(youtube music|youtube|spotify)\\b"), " ")
+            q = q.replace(Regex("\\b(toca|tocar|coloca|colocar|coloque|poe|poem|ponha|bota|botar|procura|procurar|pesquisa|pesquisar|busca|buscar|escuta|escutar|ouvir|roda|rodar|abre|abrir|abra|uma|um|o|a|os|as|de|do|da|no|na|em|minha|tela|musica|música|video|clipe|som|por favor|pra mim|para mim|ai|agora)\\b"), " ")
+            q = q.replace(Regex("\\s+"), " ").trim()
+            if (q.isNotEmpty()) {
+                return if (servico == "youtube")
+                    Action(ActionType.MEDIA, "Abrindo o YouTube com $q.",
+                        pkg = AppCatalog.resolve("youtube") ?: "app.revanced.android.youtube",
+                        query = q, note = "busca YouTube")
+                else
+                    Action(ActionType.MEDIA, "Tocando $q no Spotify.",
+                        pkg = AppCatalog.resolve("spotify") ?: "com.spotify.music",
+                        query = q, note = "Spotify search+play")
             }
+            // sem busca real -> cai pro "abrir app" abaixo
         }
 
         // 7. Câmeras (função interna do app)
@@ -190,8 +194,9 @@ object CommandParser {
                 "Costuma ter transito carregado nas avenidas principais de $cidade neste horario. Quer que eu abra o Waze?")
         }
 
-        // 9. Abrir app
-        if (Regex("\\b(abre|abrir|abra|inicia|chama|liga|poe)\\b").containsMatchIn(t)) {
+        // 9. Abrir app (muitas variações: abra, coloca, põe na tela, bota, manda, chama, quero...)
+        if (Regex("\\b(abre|abrir|abra|inicia|iniciar|chama|chamar|liga|poe|poem|ponha|coloca|colocar|coloque|bota|botar|manda|mandar|joga|jogar|quero|entra|entrar|roda|rodar|vai)\\b").containsMatchIn(t)
+            || t.contains("na tela")) {
             // apps da loja (pacote real do catálogo)
             acharApp(t)?.let { (nome, pkg) ->
                 return Action(ActionType.OPEN_APP, "Abrindo o $nome.", pkg = pkg)

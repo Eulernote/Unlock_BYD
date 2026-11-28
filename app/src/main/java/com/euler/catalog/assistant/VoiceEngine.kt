@@ -146,7 +146,9 @@ class VoiceEngine(
     private fun construirGramatica(): String {
         val base = ("liga ligar ligue desliga desligar desligue abre abrir abra fecha fechar feche " +
             "sobe subir baixa baixar abaixa trava travar tranca destrava destravar destranca " +
-            "ventila ventilar poe bota coloca toca tocar procura pesquisa navega navegar vai leva da partida " +
+            "ventila ventilar poe poem bota botar coloca colocar coloque manda mandar joga jogar quero " +
+            "entra entrar roda rodar inicia iniciar chama chamar vai leva tela na minha " +
+            "toca tocar procura pesquisa navega navegar partida " +
             "ar condicionado temperatura clima vidro vidros janela janelas carro veiculo porta malas pisca " +
             "farol farois banco musica video volume " +
             "um uma dois duas tres quatro cinco seis sete oito nove dez onze doze treze quatorze catorze " +
@@ -155,11 +157,7 @@ class VoiceEngine(
             "youtube waze spotify netflix whatsapp radio configuracoes configuracao instagram google hey up re reup")
         val palavras = LinkedHashSet<String>()
         base.split(" ").forEach { if (it.isNotBlank()) palavras.add(it) }
-        try {
-            AppCatalog.nomes().forEach { nome ->
-                nome.lowercase().split(" ", "-", ".", "_").forEach { w -> if (w.length > 1) palavras.add(w) }
-            }
-        } catch (_: Throwable) {}
+        try { AppCatalog.vocabulario().forEach { w -> if (w.length > 1) palavras.add(w) } } catch (_: Throwable) {}
         val arr = org.json.JSONArray()
         palavras.forEach { arr.put(it) }
         arr.put("[unk]")
