@@ -2,6 +2,7 @@ package com.euler.catalog.assistant
 
 import android.content.Context
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
@@ -15,12 +16,11 @@ import kotlin.math.sqrt
 /**
  * Motor de voz offline do "Hey Up", sobre o Vosk (Kaldi).
  *
- * Trocamos o sherpa-onnx pelo Vosk porque o onnxruntime crashava ao criar qualquer sessão
- * nesta multimídia BYD (a lib carregava, mas criar a sessão derrubava o app). O Vosk tem motor
- * nativo próprio, feito pra hardware fraco/antigo.
- *
- *  - "Falar agora" (push-to-talk): grava até o silêncio (detecção por energia) e transcreve.
- *  - "Ativar voz" (ambiente): reconhece contínuo e dispara quando ouve a palavra de ativação.
+ * O reconhecimento (Vosk) já funciona nesta multimídia. O bloqueio é o microfone: o AudioRecord
+ * inicia mas não entrega frames. Pela engenharia reversa do Electro/Sentry/Overdrive (que gravam
+ * mic neste carro), a captura deles é um AudioRecord simples — a diferença está em CONFIG/ESTADO.
+ * Então o abridor aqui: (1) tira o mute do mic, (2) lê o sample rate nativo do aparelho, e (3) varre
+ * fontes × taxas × (mono/estéreo) lendo de verdade, e usa a 1ª combinação que entregar áudio.
  */
 class VoiceEngine(
     private val ctx: Context,
@@ -29,8 +29,7 @@ class VoiceEngine(
     private val onError: (String) -> Unit
 ) {
     private val TAG = "VoiceEngine"
-    private val SAMPLE_RATE = 16000
-    private val FRAME = 1600 // 100 ms
+    private val OUT_RATE = 16000 // taxa que o Vosk espera
 
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -40,10 +39,14 @@ class VoiceEngine(
 
     private val WAKE = listOf("hey up", "ei up", "reup", "re up", "rê up", " up ")
 
+    class MicPick(val rec: AudioRecord, val sampleRate: Int, val channels: Int, val source: Int) {
+        fun desc() = "fonte=$source taxa=$sampleRate canais=$channels"
+    }
+
     private fun ensureModel() {
         if (!libReady) {
             CrashLog.stage(ctx, "voz: carregando a lib nativa (Vosk)")
-            LibVosk.setLogLevel(LogLevel.WARNINGS) // força o load do libvosk.so
+            LibVosk.setLogLevel(LogLevel.WARNINGS)
             libReady = true
             CrashLog.stage(ctx, "voz: lib nativa OK")
         }
@@ -55,93 +58,107 @@ class VoiceEngine(
         }
     }
 
-    class MicPick(val rec: AudioRecord, val sampleRate: Int, val source: Int)
-
-    /**
-     * Abre o microfone testando várias FONTES e TAXAS até achar uma que entregue áudio de verdade.
-     * Em multimídia BYD a fonte/ taxa certa varia (às vezes só MIC, às vezes só 48 kHz), e as demais
-     * vêm zeradas. Detecta pelo "chão de ruído": um stream vivo sempre tem algum sample != 0.
-     */
-    private fun openLiveMic(): MicPick? {
-        val fontes = listOf(
-            MediaRecorder.AudioSource.MIC,
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            MediaRecorder.AudioSource.CAMCORDER,
-            MediaRecorder.AudioSource.DEFAULT
-        )
-        val taxas = listOf(16000, 48000, 44100)
-        var abriuAlgum = false
-        for (sr in taxas) for (src in fontes) {
-            val minBuf = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            if (minBuf <= 0) continue
-            val ar = try {
-                AudioRecord(src, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, sr))
-            } catch (_: Throwable) { continue }
-            if (ar.state != AudioRecord.STATE_INITIALIZED) { try { ar.release() } catch (_: Throwable) {}; continue }
-            abriuAlgum = true
-            var vivo = false
-            try {
-                ar.startRecording()
-                val probe = ShortArray(sr / 5)
-                val t0 = System.currentTimeMillis()
-                while (System.currentTimeMillis() - t0 < 350 && !vivo) {
-                    val n = ar.read(probe, 0, probe.size)
-                    if (n > 0) for (i in 0 until n) if (probe[i].toInt() != 0) { vivo = true; break }
-                }
-            } catch (_: Throwable) {}
-            if (vivo) {
-                CrashLog.stage(ctx, "mic: ATIVO fonte=$src taxa=$sr")
-                return MicPick(ar, sr, src)
-            }
-            try { ar.stop(); ar.release() } catch (_: Throwable) {}
-        }
-        CrashLog.stage(ctx, "mic: nenhuma fonte entregou audio (abriu=$abriuAlgum)")
-        return null
-    }
-
-    /** Reamostra para 16 kHz (vizinho mais próximo; suficiente p/ reconhecimento). */
-    private fun to16k(src: ShortArray, n: Int, sr: Int): ShortArray {
-        if (sr == SAMPLE_RATE) return src.copyOf(n)
-        val outN = (n.toLong() * SAMPLE_RATE / sr).toInt()
+    /** Converte um frame lido (mono ou estéreo interleaved) para mono 16 kHz. */
+    private fun paraMono16k(buf: ShortArray, n: Int, channels: Int, sr: Int): ShortArray {
+        // 1) estéreo -> mono (média dos pares)
+        val mono: ShortArray; val mN: Int
+        if (channels >= 2) {
+            mN = n / 2
+            mono = ShortArray(mN)
+            for (i in 0 until mN) mono[i] = ((buf[2 * i] + buf[2 * i + 1]) / 2).toShort()
+        } else { mono = buf; mN = n }
+        // 2) reamostra para 16 kHz (vizinho mais próximo)
+        if (sr == OUT_RATE) return mono.copyOf(mN)
+        val outN = (mN.toLong() * OUT_RATE / sr).toInt()
         if (outN <= 0) return ShortArray(0)
         val out = ShortArray(outN)
-        val step = sr.toDouble() / SAMPLE_RATE
+        val step = sr.toDouble() / OUT_RATE
         var pos = 0.0
-        for (i in 0 until outN) { out[i] = src[pos.toInt().coerceIn(0, n - 1)]; pos += step }
+        for (i in 0 until outN) { out[i] = mono[pos.toInt().coerceIn(0, mN - 1)]; pos += step }
         return out
+    }
+
+    private fun rmsDe(buf: ShortArray, n: Int, channels: Int): Double {
+        var soma = 0.0; var c = 0
+        var i = 0
+        while (i < n) { val v = buf[i] / 32768.0; soma += v * v; c++; i += channels }
+        return if (c > 0) sqrt(soma / c) else 0.0
+    }
+
+    /**
+     * Abre o microfone de verdade: unmute + rate nativo + varredura fonte×taxa×canais lendo áudio real.
+     */
+    private fun openLiveMic(): MicPick? {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        var mutedAntes = "?"
+        try {
+            if (am != null) {
+                mutedAntes = am.isMicrophoneMute.toString()
+                am.isMicrophoneMute = false // tira o mute (suspeito nº1 de "inicia mas vem 0")
+            }
+        } catch (_: Throwable) {}
+        val nativo = try { am?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 0 } catch (_: Throwable) { 0 }
+        CrashLog.stage(ctx, "mic: unmute (antes=$mutedAntes), rateNativo=$nativo")
+
+        val taxas = LinkedHashSet<Int>().apply { if (nativo > 0) add(nativo); add(48000); add(16000); add(44100) }.toList()
+        // (config, numCanais): estéreo primeiro — mic de carro costuma ser array
+        val canais = listOf(AudioFormat.CHANNEL_IN_STEREO to 2, AudioFormat.CHANNEL_IN_MONO to 1)
+        val fontes = listOf(6, 1, 7, 5, 0) // VOICE_RECOGNITION, MIC, VOICE_COMMUNICATION, CAMCORDER, DEFAULT
+        var silencioInfo: String? = null // combinação que deu frames mas sem áudio (mic mudo)
+
+        for ((cfg, cnt) in canais) for (sr in taxas) for (src in fontes) {
+            val minBuf = AudioRecord.getMinBufferSize(sr, cfg, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBuf <= 0) continue
+            val ar = try {
+                AudioRecord(src, sr, cfg, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf * 4, sr * cnt))
+            } catch (_: Throwable) { continue }
+            if (ar.state != AudioRecord.STATE_INITIALIZED) { try { ar.release() } catch (_: Throwable) {}; continue }
+            var frames = 0; var pico = 0.0
+            try {
+                ar.startRecording()
+                val buf = ShortArray(minBuf)
+                val t0 = System.currentTimeMillis()
+                while (System.currentTimeMillis() - t0 < 500) {
+                    val n = ar.read(buf, 0, buf.size)
+                    if (n > 0) { frames++; val r = rmsDe(buf, n, cnt); if (r > pico) pico = r }
+                }
+            } catch (_: Throwable) {}
+            if (pico > 0.0008) {
+                CrashLog.stage(ctx, "mic: ATIVO ${MicPick(ar, sr, cnt, src).desc()} pico=${"%.4f".format(pico)}")
+                return MicPick(ar, sr, cnt, src)
+            }
+            if (frames > 0 && silencioInfo == null) silencioInfo = "fonte=$src taxa=$sr canais=$cnt (frames mas silencio)"
+            try { ar.stop(); ar.release() } catch (_: Throwable) {}
+        }
+        CrashLog.stage(ctx, "mic: nenhuma combinacao entregou audio. silencio=${silencioInfo ?: "nenhum frame em nada"}")
+        return null
     }
 
     private fun textoDe(json: String): String =
         try { JSONObject(json).optString("text").trim() } catch (_: Throwable) { "" }
 
-    /**
-     * "Falar agora": grava até o silêncio (detecção por energia) e transcreve com o Vosk.
-     */
     fun captureOnce() {
         Thread({
             CrashLog.stage(ctx, "voz: iniciando (push-to-talk)")
             try { ensureModel() } catch (e: Throwable) {
-                onError("Erro ao iniciar a voz: ${e.message}")
-                CrashLog.write(ctx, "voz-init", e); return@Thread
+                onError("Erro ao iniciar a voz: ${e.message}"); CrashLog.write(ctx, "voz-init", e); return@Thread
             }
-            val rec = try { Recognizer(model, SAMPLE_RATE.toFloat()) } catch (e: Throwable) {
-                onError("Erro ao criar o reconhecedor: ${e.message}")
-                CrashLog.write(ctx, "voz-recognizer", e); return@Thread
+            val rec = try { Recognizer(model, OUT_RATE.toFloat()) } catch (e: Throwable) {
+                onError("Erro ao criar o reconhecedor: ${e.message}"); return@Thread
             }
             val pick = try { openLiveMic() } catch (e: Throwable) {
                 rec.close(); onError("Erro ao abrir o microfone: ${e.message}"); return@Thread
             }
             if (pick == null) {
                 rec.close()
-                onError("Mic mudo em todas as fontes (nivel 0). Esta ocupado/bloqueado pelo sistema.")
+                onError("Mic nao entrega audio em nenhuma fonte/taxa/canal. (veja ULTIMA ETAPA)")
                 return@Thread
             }
             val audio = pick.rec
             try {
                 onWake()
-                CrashLog.stage(ctx, "voz: gravando (fale agora) [fonte=${pick.source} taxa=${pick.sampleRate}]")
-                val buf = ShortArray(maxOf(pick.sampleRate / 10, 320))
+                CrashLog.stage(ctx, "voz: gravando (fale agora) [${pick.desc()}]")
+                val buf = ShortArray(maxOf(pick.sampleRate / 10 * pick.channels, 640))
                 var falou = false
                 var pico = 0.0
                 val inicio = System.currentTimeMillis()
@@ -149,24 +166,22 @@ class VoiceEngine(
                 while (System.currentTimeMillis() - inicio < 8000) {
                     val n = audio.read(buf, 0, buf.size)
                     if (n <= 0) continue
-                    var soma = 0.0
-                    for (i in 0 until n) { val v = buf[i] / 32768.0f; soma += (v * v).toDouble() }
-                    val rms = sqrt(soma / n)
+                    val rms = rmsDe(buf, n, pick.channels)
                     if (rms > pico) pico = rms
-                    val a16 = to16k(buf, n, pick.sampleRate)
+                    val a16 = paraMono16k(buf, n, pick.channels, pick.sampleRate)
                     if (a16.isNotEmpty()) rec.acceptWaveForm(a16, a16.size)
                     val agora = System.currentTimeMillis()
                     if (rms > 0.006) { falou = true; ultimaFala = agora }
                     else if (falou && agora - ultimaFala >= 800) break
                     else if (!falou && agora - inicio > 5000) break
                 }
-                val nivel = String.format("%.4f", pico)
-                CrashLog.stage(ctx, "voz: captura fim (nivelMax=$nivel falou=$falou fonte=${pick.source} taxa=${pick.sampleRate})")
+                val nivel = "%.4f".format(pico)
+                CrashLog.stage(ctx, "voz: captura fim (nivelMax=$nivel falou=$falou ${pick.desc()})")
                 val texto = textoDe(rec.finalResult)
                 CrashLog.stage(ctx, "voz: reconhecido = \"$texto\"")
                 when {
                     texto.isNotBlank() -> onText(texto)
-                    pico < 0.004 -> onError("Mic abriu (fonte ${pick.source}/${pick.sampleRate}Hz) mas veio quase mudo (nivel $nivel).")
+                    pico < 0.004 -> onError("Mic abriu (${pick.desc()}) mas veio quase mudo (nivel $nivel).")
                     else -> onError("Nao entendi (nivel $nivel). Fale mais claro apos tocar.")
                 }
             } catch (e: Throwable) {
@@ -181,7 +196,7 @@ class VoiceEngine(
     fun start() {
         if (running) return
         try { ensureModel() } catch (e: Throwable) {
-            onError("Erro ao iniciar a voz: ${e.message}"); CrashLog.write(ctx, "voz-init", e); return
+            onError("Erro ao iniciar a voz: ${e.message}"); return
         }
         running = true
         thread = Thread({ loop() }, "hey-up-voice").apply { start() }
@@ -194,23 +209,21 @@ class VoiceEngine(
     }
 
     private fun loop() {
-        val rec = try { Recognizer(model, SAMPLE_RATE.toFloat()) } catch (e: Throwable) {
+        val rec = try { Recognizer(model, OUT_RATE.toFloat()) } catch (e: Throwable) {
             onError("Erro ao criar o reconhecedor: ${e.message}"); return
         }
         val pick = try { openLiveMic() } catch (e: Throwable) {
             rec.close(); onError("Erro ao abrir o microfone: ${e.message}"); return
         }
-        if (pick == null) {
-            rec.close(); onError("Mic mudo em todas as fontes (nivel 0). Esta ocupado/bloqueado pelo sistema."); return
-        }
+        if (pick == null) { rec.close(); onError("Mic nao entrega audio (modo ambiente)."); return }
         val audio = pick.rec
-        val buf = ShortArray(maxOf(pick.sampleRate / 10, 320))
+        val buf = ShortArray(maxOf(pick.sampleRate / 10 * pick.channels, 640))
         try {
-            CrashLog.stage(ctx, "voz: ambiente ligado (diga Hey Up) [fonte=${pick.source} taxa=${pick.sampleRate}]")
+            CrashLog.stage(ctx, "voz: ambiente ligado (diga Hey Up) [${pick.desc()}]")
             while (running) {
                 val n = audio.read(buf, 0, buf.size)
                 if (n <= 0) continue
-                val a16 = to16k(buf, n, pick.sampleRate)
+                val a16 = paraMono16k(buf, n, pick.channels, pick.sampleRate)
                 if (a16.isNotEmpty() && rec.acceptWaveForm(a16, a16.size)) {
                     val texto = textoDe(rec.result).lowercase()
                     if (texto.isBlank()) continue
