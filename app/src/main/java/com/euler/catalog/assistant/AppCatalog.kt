@@ -71,6 +71,9 @@ object AppCatalog {
         return m
     }
 
+    /** Todos os nomes de apps conhecidos (para alimentar a gramática do reconhecimento de voz). */
+    fun nomes(): Set<String> = try { mapa().keys } catch (_: Throwable) { emptySet() }
+
     /** Resolve um nome falado (ex.: "youtube") para o pacote real, ou null. */
     fun resolve(nome: String): String? {
         val n = CommandParser.normalizar(nome)

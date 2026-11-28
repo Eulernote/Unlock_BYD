@@ -138,6 +138,38 @@ class VoiceEngine(
         try { JSONObject(json).optString("text").trim() } catch (_: Throwable) { "" }
 
     /**
+     * Gramática = vocabulário dos comandos + nomes de apps do catálogo + "[unk]".
+     * Isso guia o Vosk a reconhecer os comandos com muito mais precisão (ex.: "abrir" não vira
+     * "abril"). O "[unk]" deixa palavras livres (destinos, nomes de música) ainda passarem.
+     */
+    private fun construirGramatica(): String {
+        val base = ("liga ligar ligue desliga desligar desligue abre abrir abra fecha fechar feche " +
+            "sobe subir baixa baixar abaixa trava travar tranca destrava destravar destranca " +
+            "ventila ventilar poe bota coloca toca tocar procura pesquisa navega navegar vai leva da partida " +
+            "ar condicionado temperatura clima vidro vidros janela janelas carro veiculo porta malas pisca " +
+            "farol farois banco musica video volume " +
+            "um uma dois duas tres quatro cinco seis sete oito nove dez onze doze treze quatorze catorze " +
+            "quinze dezesseis dezessete dezoito dezenove vinte trinta grau graus nivel " +
+            "no na o a os as de do dos das pro pra para com e em " +
+            "youtube waze spotify netflix whatsapp radio configuracoes configuracao instagram google hey up re reup")
+        val palavras = LinkedHashSet<String>()
+        base.split(" ").forEach { if (it.isNotBlank()) palavras.add(it) }
+        try {
+            AppCatalog.nomes().forEach { nome ->
+                nome.lowercase().split(" ", "-", ".", "_").forEach { w -> if (w.length > 1) palavras.add(w) }
+            }
+        } catch (_: Throwable) {}
+        val arr = org.json.JSONArray()
+        palavras.forEach { arr.put(it) }
+        arr.put("[unk]")
+        return arr.toString()
+    }
+
+    private fun novoRecognizer(): Recognizer =
+        try { Recognizer(model, OUT_RATE.toFloat(), construirGramatica()) }
+        catch (_: Throwable) { Recognizer(model, OUT_RATE.toFloat()) }
+
+    /**
      * Auto-concede a permissão e o AppOps do microfone pelo shell do carro (uid 2000), como o
      * usuário pediu — e reporta o estado real (permissão + modo do AppOps), que diz se o bloqueio
      * é de permissão/AppOps ou de outra coisa.
@@ -167,7 +199,7 @@ class VoiceEngine(
             try { ensureModel() } catch (e: Throwable) {
                 onError("Erro ao iniciar a voz: ${e.message}"); CrashLog.write(ctx, "voz-init", e); return@Thread
             }
-            val rec = try { Recognizer(model, OUT_RATE.toFloat()) } catch (e: Throwable) {
+            val rec = try { novoRecognizer() } catch (e: Throwable) {
                 onError("Erro ao criar o reconhecedor: ${e.message}"); return@Thread
             }
             // Garante permissão/AppOps do microfone pelo shell do carro ANTES de abrir.
@@ -235,7 +267,7 @@ class VoiceEngine(
     }
 
     private fun loop() {
-        val rec = try { Recognizer(model, OUT_RATE.toFloat()) } catch (e: Throwable) {
+        val rec = try { novoRecognizer() } catch (e: Throwable) {
             onError("Erro ao criar o reconhecedor: ${e.message}"); return
         }
         val pick = try { openLiveMic() } catch (e: Throwable) {
