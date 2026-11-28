@@ -94,6 +94,7 @@ object AppCatalog {
         "jogos" to "emulad", "jogo" to "emulad", "games" to "emulad", "game" to "emulad",
         "emulador" to "emulad", "emuladores" to "emulad", "emulators" to "emulad", "emulacao" to "emulad",
         "melon" to "emulad", "videogame" to "emulad", "nintendo" to "emulad", "console" to "emulad",
+        "motor" to "sound", "barulho" to "sound", "ronco" to "sound", "evsound" to "sound", "escapamento" to "sound",
         "radar" to "radar", "radares" to "radar",
         "navegador" to "waze", "navegacao" to "waze", "gps" to "waze",
         "yt" to "youtube", "video" to "youtube", "videos" to "youtube",
