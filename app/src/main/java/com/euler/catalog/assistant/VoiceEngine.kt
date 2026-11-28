@@ -55,13 +55,61 @@ class VoiceEngine(
         }
     }
 
-    private fun newAudioRecord(): AudioRecord {
-        val minBuf = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        return AudioRecord(
+    class MicPick(val rec: AudioRecord, val sampleRate: Int, val source: Int)
+
+    /**
+     * Abre o microfone testando várias FONTES e TAXAS até achar uma que entregue áudio de verdade.
+     * Em multimídia BYD a fonte/ taxa certa varia (às vezes só MIC, às vezes só 48 kHz), e as demais
+     * vêm zeradas. Detecta pelo "chão de ruído": um stream vivo sempre tem algum sample != 0.
+     */
+    private fun openLiveMic(): MicPick? {
+        val fontes = listOf(
+            MediaRecorder.AudioSource.MIC,
             MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuf, SAMPLE_RATE))
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.CAMCORDER,
+            MediaRecorder.AudioSource.DEFAULT
+        )
+        val taxas = listOf(16000, 48000, 44100)
+        var abriuAlgum = false
+        for (sr in taxas) for (src in fontes) {
+            val minBuf = AudioRecord.getMinBufferSize(sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBuf <= 0) continue
+            val ar = try {
+                AudioRecord(src, sr, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf, sr))
+            } catch (_: Throwable) { continue }
+            if (ar.state != AudioRecord.STATE_INITIALIZED) { try { ar.release() } catch (_: Throwable) {}; continue }
+            abriuAlgum = true
+            var vivo = false
+            try {
+                ar.startRecording()
+                val probe = ShortArray(sr / 5)
+                val t0 = System.currentTimeMillis()
+                while (System.currentTimeMillis() - t0 < 350 && !vivo) {
+                    val n = ar.read(probe, 0, probe.size)
+                    if (n > 0) for (i in 0 until n) if (probe[i].toInt() != 0) { vivo = true; break }
+                }
+            } catch (_: Throwable) {}
+            if (vivo) {
+                CrashLog.stage(ctx, "mic: ATIVO fonte=$src taxa=$sr")
+                return MicPick(ar, sr, src)
+            }
+            try { ar.stop(); ar.release() } catch (_: Throwable) {}
+        }
+        CrashLog.stage(ctx, "mic: nenhuma fonte entregou audio (abriu=$abriuAlgum)")
+        return null
+    }
+
+    /** Reamostra para 16 kHz (vizinho mais próximo; suficiente p/ reconhecimento). */
+    private fun to16k(src: ShortArray, n: Int, sr: Int): ShortArray {
+        if (sr == SAMPLE_RATE) return src.copyOf(n)
+        val outN = (n.toLong() * SAMPLE_RATE / sr).toInt()
+        if (outN <= 0) return ShortArray(0)
+        val out = ShortArray(outN)
+        val step = sr.toDouble() / SAMPLE_RATE
+        var pos = 0.0
+        for (i in 0 until outN) { out[i] = src[pos.toInt().coerceIn(0, n - 1)]; pos += step }
+        return out
     }
 
     private fun textoDe(json: String): String =
@@ -81,41 +129,45 @@ class VoiceEngine(
                 onError("Erro ao criar o reconhecedor: ${e.message}")
                 CrashLog.write(ctx, "voz-recognizer", e); return@Thread
             }
-            val audio = try { newAudioRecord() } catch (e: Throwable) {
-                rec.close(); onError("Sem acesso ao microfone: ${e.message}"); return@Thread
+            val pick = try { openLiveMic() } catch (e: Throwable) {
+                rec.close(); onError("Erro ao abrir o microfone: ${e.message}"); return@Thread
             }
+            if (pick == null) {
+                rec.close()
+                onError("Mic mudo em todas as fontes (nivel 0). Esta ocupado/bloqueado pelo sistema.")
+                return@Thread
+            }
+            val audio = pick.rec
             try {
-                audio.startRecording()
                 onWake()
-                CrashLog.stage(ctx, "voz: gravando (fale agora)")
-                val buf = ShortArray(FRAME)
+                CrashLog.stage(ctx, "voz: gravando (fale agora) [fonte=${pick.source} taxa=${pick.sampleRate}]")
+                val buf = ShortArray(maxOf(pick.sampleRate / 10, 320))
                 var falou = false
-                var silencioMs = 0
                 var pico = 0.0
-                var totalFrames = 0
                 val inicio = System.currentTimeMillis()
+                var ultimaFala = inicio
                 while (System.currentTimeMillis() - inicio < 8000) {
                     val n = audio.read(buf, 0, buf.size)
                     if (n <= 0) continue
-                    totalFrames++
                     var soma = 0.0
                     for (i in 0 until n) { val v = buf[i] / 32768.0f; soma += (v * v).toDouble() }
                     val rms = sqrt(soma / n)
                     if (rms > pico) pico = rms
-                    rec.acceptWaveForm(buf, n)
-                    if (rms > 0.006) { falou = true; silencioMs = 0 }
-                    else if (falou) { silencioMs += 100; if (silencioMs >= 800) break }
-                    else if (System.currentTimeMillis() - inicio > 5000) break
+                    val a16 = to16k(buf, n, pick.sampleRate)
+                    if (a16.isNotEmpty()) rec.acceptWaveForm(a16, a16.size)
+                    val agora = System.currentTimeMillis()
+                    if (rms > 0.006) { falou = true; ultimaFala = agora }
+                    else if (falou && agora - ultimaFala >= 800) break
+                    else if (!falou && agora - inicio > 5000) break
                 }
                 val nivel = String.format("%.4f", pico)
-                CrashLog.stage(ctx, "voz: captura fim (nivelMax=$nivel frames=$totalFrames falou=$falou)")
-                // Sempre tenta transcrever: mesmo com microfone fraco o Vosk pode ter captado algo.
+                CrashLog.stage(ctx, "voz: captura fim (nivelMax=$nivel falou=$falou fonte=${pick.source} taxa=${pick.sampleRate})")
                 val texto = textoDe(rec.finalResult)
                 CrashLog.stage(ctx, "voz: reconhecido = \"$texto\"")
                 when {
                     texto.isNotBlank() -> onText(texto)
-                    pico < 0.004 -> onError("Microfone nao capta audio (nivel $nivel). Mic ocupado/conflito.")
-                    else -> onError("Nao entendi (nivel $nivel). Fale mais alto/claro apos tocar.")
+                    pico < 0.004 -> onError("Mic abriu (fonte ${pick.source}/${pick.sampleRate}Hz) mas veio quase mudo (nivel $nivel).")
+                    else -> onError("Nao entendi (nivel $nivel). Fale mais claro apos tocar.")
                 }
             } catch (e: Throwable) {
                 onError("Erro na captura: ${e.message}"); CrashLog.write(ctx, "voz-captura", e)
@@ -145,17 +197,21 @@ class VoiceEngine(
         val rec = try { Recognizer(model, SAMPLE_RATE.toFloat()) } catch (e: Throwable) {
             onError("Erro ao criar o reconhecedor: ${e.message}"); return
         }
-        val audio = try { newAudioRecord() } catch (e: Throwable) {
-            rec.close(); onError("Sem acesso ao microfone: ${e.message}"); return
+        val pick = try { openLiveMic() } catch (e: Throwable) {
+            rec.close(); onError("Erro ao abrir o microfone: ${e.message}"); return
         }
-        val buf = ShortArray(FRAME)
+        if (pick == null) {
+            rec.close(); onError("Mic mudo em todas as fontes (nivel 0). Esta ocupado/bloqueado pelo sistema."); return
+        }
+        val audio = pick.rec
+        val buf = ShortArray(maxOf(pick.sampleRate / 10, 320))
         try {
-            audio.startRecording()
-            CrashLog.stage(ctx, "voz: ambiente ligado (diga Hey Up)")
+            CrashLog.stage(ctx, "voz: ambiente ligado (diga Hey Up) [fonte=${pick.source} taxa=${pick.sampleRate}]")
             while (running) {
                 val n = audio.read(buf, 0, buf.size)
                 if (n <= 0) continue
-                if (rec.acceptWaveForm(buf, n)) {
+                val a16 = to16k(buf, n, pick.sampleRate)
+                if (a16.isNotEmpty() && rec.acceptWaveForm(a16, a16.size)) {
                     val texto = textoDe(rec.result).lowercase()
                     if (texto.isBlank()) continue
                     val gatilho = WAKE.firstOrNull { texto.contains(it.trim()) }

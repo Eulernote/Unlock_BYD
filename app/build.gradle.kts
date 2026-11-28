@@ -23,8 +23,8 @@ android {
         // targetSdk 25 (v78): igual ao Electro e ao Overdrive — o firmware BYD só entrega as permissões
         // internas (ACC, bateria, ar) para apps nesse modo. Teste no Dolphin GS.
         targetSdk = 25
-        versionCode = 111
-        versionName = "11.8"
+        versionCode = 112
+        versionName = "11.9"
 
         // Multimídias dos carros são arm64 — limita os .so nativos (sherpa-onnx) a essa ABI.
         ndk {
