@@ -64,10 +64,12 @@ object AppCatalog {
     }
 
     private fun mapa(): Map<String, String> {
-        live?.let { return it }
-        // reserva + nativos
+        // Sempre mescla a reserva + nativos como base, e deixa o catálogo da loja por cima.
+        // Assim os nomes falados comuns (waze, youtube, spotify) resolvem mesmo que a loja
+        // nomeie o app de outro jeito; e o catálogo da loja tem prioridade quando existe.
         val m = LinkedHashMap<String, String>()
         m.putAll(reserva); m.putAll(nativos)
+        live?.let { m.putAll(it) }
         return m
     }
 
