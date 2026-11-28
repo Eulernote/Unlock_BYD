@@ -137,6 +137,41 @@ class VoiceEngine(
     private fun textoDe(json: String): String =
         try { JSONObject(json).optString("text").trim() } catch (_: Throwable) { "" }
 
+    /**
+     * Testa a captura via MediaRecorder (passa pelo audioserver do sistema, que tem privilégio de
+     * áudio próprio) — caminho diferente do AudioRecord direto, que às vezes funciona onde o direto
+     * não entrega frame. Mede a amplitude: se > 0, esse caminho capta e dá pra usar.
+     */
+    private fun testeMediaRecorder(): String {
+        val fontes = listOf(6 to "VOICE_RECOGNITION", 1 to "MIC", 5 to "CAMCORDER")
+        val f = java.io.File(ctx.cacheDir, "mictest.m4a")
+        for ((src, nome) in fontes) {
+            val mr = MediaRecorder()
+            try {
+                mr.setAudioSource(src)
+                mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                mr.setAudioSamplingRate(16000)
+                mr.setOutputFile(f.absolutePath)
+                mr.prepare(); mr.start()
+                var pico = 0
+                val t0 = System.currentTimeMillis()
+                while (System.currentTimeMillis() - t0 < 2500) {
+                    Thread.sleep(150)
+                    val a = try { mr.maxAmplitude } catch (_: Throwable) { 0 }
+                    if (a > pico) pico = a
+                }
+                try { mr.stop() } catch (_: Throwable) {}
+                val tam = f.length()
+                CrashLog.stage(ctx, "MediaRecorder $nome: ampMax=$pico arq=${tam}B")
+                if (pico > 0) return "MediaRecorder CAPTA via $nome (amp=$pico, arq=${tam}B) — da pra usar esse caminho!"
+            } catch (e: Throwable) {
+                CrashLog.stage(ctx, "MediaRecorder $nome falhou: ${e.message}")
+            } finally { try { mr.release() } catch (_: Throwable) {} }
+        }
+        return "MediaRecorder tambem nao captou (amp 0 em todas as fontes)."
+    }
+
     fun captureOnce() {
         Thread({
             CrashLog.stage(ctx, "voz: iniciando (push-to-talk)")
@@ -151,7 +186,9 @@ class VoiceEngine(
             }
             if (pick == null) {
                 rec.close()
-                onError("Mic nao entrega audio em nenhuma fonte/taxa/canal. (veja ULTIMA ETAPA)")
+                CrashLog.stage(ctx, "voz: AudioRecord nao captou; testando MediaRecorder")
+                val mr = testeMediaRecorder()
+                onError("AudioRecord nao captou. $mr")
                 return@Thread
             }
             val audio = pick.rec
