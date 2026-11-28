@@ -118,16 +118,17 @@ class VoiceEngine(
                 ar.startRecording()
                 val buf = ShortArray(minBuf)
                 val t0 = System.currentTimeMillis()
-                while (System.currentTimeMillis() - t0 < 500) {
+                while (System.currentTimeMillis() - t0 < 500 && frames < 4) {
                     val n = ar.read(buf, 0, buf.size)
                     if (n > 0) { frames++; val r = rmsDe(buf, n, cnt); if (r > pico) pico = r }
                 }
             } catch (_: Throwable) {}
-            if (pico > 0.0008) {
-                CrashLog.stage(ctx, "mic: ATIVO ${MicPick(ar, sr, cnt, src).desc()} pico=${"%.4f".format(pico)}")
+            // Mic vivo = ENTREGA FRAMES (dados), mesmo em silencio. Nao exige som no momento da sondagem
+            // (o usuario fala depois). Antes da liberacao do appops, read nao retornava frame nenhum.
+            if (frames >= 2) {
+                CrashLog.stage(ctx, "mic: ATIVO ${MicPick(ar, sr, cnt, src).desc()} frames=$frames pico=${"%.4f".format(pico)}")
                 return MicPick(ar, sr, cnt, src)
             }
-            if (frames > 0 && silencioInfo == null) silencioInfo = "fonte=$src taxa=$sr canais=$cnt (frames mas silencio)"
             try { ar.stop(); ar.release() } catch (_: Throwable) {}
         }
         CrashLog.stage(ctx, "mic: nenhuma combinacao entregou audio. silencio=${silencioInfo ?: "nenhum frame em nada"}")
