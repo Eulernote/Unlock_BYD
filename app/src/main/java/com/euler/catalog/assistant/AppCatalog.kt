@@ -92,7 +92,8 @@ object AppCatalog {
     private val sinonimos = linkedMapOf(
         "equalizador" to "equaliz", "equalizacao" to "equaliz", "equalize" to "equaliz",
         "jogos" to "emulad", "jogo" to "emulad", "games" to "emulad", "game" to "emulad",
-        "emulador" to "emulad", "emuladores" to "emulad", "emulators" to "emulad",
+        "emulador" to "emulad", "emuladores" to "emulad", "emulators" to "emulad", "emulacao" to "emulad",
+        "melon" to "emulad", "videogame" to "emulad", "nintendo" to "emulad", "console" to "emulad",
         "radar" to "radar", "radares" to "radar",
         "navegador" to "waze", "navegacao" to "waze", "gps" to "waze",
         "yt" to "youtube", "video" to "youtube", "videos" to "youtube",
