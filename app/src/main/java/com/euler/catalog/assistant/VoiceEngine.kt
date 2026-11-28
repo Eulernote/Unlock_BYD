@@ -138,38 +138,27 @@ class VoiceEngine(
         try { JSONObject(json).optString("text").trim() } catch (_: Throwable) { "" }
 
     /**
-     * Testa a captura via MediaRecorder (passa pelo audioserver do sistema, que tem privilégio de
-     * áudio próprio) — caminho diferente do AudioRecord direto, que às vezes funciona onde o direto
-     * não entrega frame. Mede a amplitude: se > 0, esse caminho capta e dá pra usar.
+     * Auto-concede a permissão e o AppOps do microfone pelo shell do carro (uid 2000), como o
+     * usuário pediu — e reporta o estado real (permissão + modo do AppOps), que diz se o bloqueio
+     * é de permissão/AppOps ou de outra coisa.
      */
-    private fun testeMediaRecorder(): String {
-        val fontes = listOf(6 to "VOICE_RECOGNITION", 1 to "MIC", 5 to "CAMCORDER")
-        val f = java.io.File(ctx.cacheDir, "mictest.m4a")
-        for ((src, nome) in fontes) {
-            val mr = MediaRecorder()
-            try {
-                mr.setAudioSource(src)
-                mr.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                mr.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                mr.setAudioSamplingRate(16000)
-                mr.setOutputFile(f.absolutePath)
-                mr.prepare(); mr.start()
-                var pico = 0
-                val t0 = System.currentTimeMillis()
-                while (System.currentTimeMillis() - t0 < 2500) {
-                    Thread.sleep(150)
-                    val a = try { mr.maxAmplitude } catch (_: Throwable) { 0 }
-                    if (a > pico) pico = a
-                }
-                try { mr.stop() } catch (_: Throwable) {}
-                val tam = f.length()
-                CrashLog.stage(ctx, "MediaRecorder $nome: ampMax=$pico arq=${tam}B")
-                if (pico > 0) return "MediaRecorder CAPTA via $nome (amp=$pico, arq=${tam}B) — da pra usar esse caminho!"
-            } catch (e: Throwable) {
-                CrashLog.stage(ctx, "MediaRecorder $nome falhou: ${e.message}")
-            } finally { try { mr.release() } catch (_: Throwable) {} }
+    private fun preparaMicPeloShell(): String {
+        return try {
+            val pkg = ctx.packageName
+            val cmd = "pm grant $pkg android.permission.RECORD_AUDIO 2>&1; " +
+                "appops set $pkg RECORD_AUDIO allow 2>&1; " +
+                "appops get $pkg RECORD_AUDIO 2>&1"
+            val r = com.euler.catalog.AdbShell.run(ctx, cmd, 20000)
+            val perm = if (ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED) "OK" else "NEGADA"
+            val appops = r.output.replace("\n", " ").trim().take(90)
+            val info = "perm=$perm appops=[$appops]"
+            CrashLog.stage(ctx, "mic: self-grant $info")
+            info
+        } catch (e: Throwable) {
+            CrashLog.stage(ctx, "mic: self-grant falhou: ${e.message}")
+            "self-grant falhou: ${e.message}"
         }
-        return "MediaRecorder tambem nao captou (amp 0 em todas as fontes)."
     }
 
     fun captureOnce() {
@@ -181,14 +170,14 @@ class VoiceEngine(
             val rec = try { Recognizer(model, OUT_RATE.toFloat()) } catch (e: Throwable) {
                 onError("Erro ao criar o reconhecedor: ${e.message}"); return@Thread
             }
+            // Garante permissão/AppOps do microfone pelo shell do carro ANTES de abrir.
+            val permInfo = preparaMicPeloShell()
             val pick = try { openLiveMic() } catch (e: Throwable) {
                 rec.close(); onError("Erro ao abrir o microfone: ${e.message}"); return@Thread
             }
             if (pick == null) {
                 rec.close()
-                CrashLog.stage(ctx, "voz: AudioRecord nao captou; testando MediaRecorder")
-                val mr = testeMediaRecorder()
-                onError("AudioRecord nao captou. $mr")
+                onError("Mic nao captou. $permInfo")
                 return@Thread
             }
             val audio = pick.rec

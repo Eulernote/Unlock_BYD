@@ -62,30 +62,7 @@ class AssistantTestActivity : Activity() {
             setPadding(0, 0, 0, pad / 2)
         })
 
-        // Campo de digitar livre — opcional e blindado (pode crashar nesta ROM).
-        try {
-            val e = EditText(this).apply {
-                hint = "ex.: fecha os vidros, ar no 3"
-                setHintTextColor(Color.parseColor("#888888")); setTextColor(Color.WHITE)
-                inputType = InputType.TYPE_CLASS_TEXT
-            }
-            if (Build.VERSION.SDK_INT >= 26) try { e.setTextClassifier(android.view.textclassifier.TextClassifier.NO_OP) } catch (_: Throwable) {}
-            entrada = e
-            col.addView(e)
-            col.addView(Button(this).apply {
-                text = "Executar (texto digitado)"
-                setOnClickListener { safe {
-                    val f = entrada?.text?.toString()?.trim().orEmpty()
-                    if (f.isEmpty()) setStatus("Escreva um comando primeiro.") else dispatch(f)
-                } }
-            })
-        } catch (ex: Throwable) {
-            CrashLog.write(applicationContext, "EditText", ex)
-            col.addView(TextView(this).apply {
-                text = "(campo de digitar indisponivel neste carro — use os botoes abaixo)"
-                setTextColor(Color.parseColor("#E0A030")); textSize = 12f
-            })
-        }
+        // (Campo de digitar removido: criar EditText crasha/loga nesta ROM. Use os botões.)
 
         // Botões de comando prontos (caminho de texto confiável — não usa EditText).
         col.addView(TextView(this).apply {
