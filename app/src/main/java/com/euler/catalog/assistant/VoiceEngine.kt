@@ -100,38 +100,46 @@ class VoiceEngine(
         val nativo = try { am?.getProperty(AudioManager.PROPERTY_OUTPUT_SAMPLE_RATE)?.toIntOrNull() ?: 0 } catch (_: Throwable) { 0 }
         CrashLog.stage(ctx, "mic: unmute (antes=$mutedAntes), rateNativo=$nativo")
 
-        val taxas = LinkedHashSet<Int>().apply { if (nativo > 0) add(nativo); add(48000); add(16000); add(44100) }.toList()
-        // (config, numCanais): estéreo primeiro — mic de carro costuma ser array
-        val canais = listOf(AudioFormat.CHANNEL_IN_STEREO to 2, AudioFormat.CHANNEL_IN_MONO to 1)
-        val fontes = listOf(6, 1, 7, 5, 0) // VOICE_RECOGNITION, MIC, VOICE_COMMUNICATION, CAMCORDER, DEFAULT
-        var silencioInfo: String? = null // combinação que deu frames mas sem áudio (mic mudo)
-
-        for ((cfg, cnt) in canais) for (sr in taxas) for (src in fontes) {
-            val minBuf = AudioRecord.getMinBufferSize(sr, cfg, AudioFormat.ENCODING_PCM_16BIT)
-            if (minBuf <= 0) continue
-            val ar = try {
-                AudioRecord(src, sr, cfg, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf * 4, sr * cnt))
-            } catch (_: Throwable) { continue }
-            if (ar.state != AudioRecord.STATE_INITIALIZED) { try { ar.release() } catch (_: Throwable) {}; continue }
-            var frames = 0; var pico = 0.0
-            try {
-                ar.startRecording()
-                val buf = ShortArray(minBuf)
-                val t0 = System.currentTimeMillis()
-                while (System.currentTimeMillis() - t0 < 500 && frames < 4) {
-                    val n = ar.read(buf, 0, buf.size)
-                    if (n > 0) { frames++; val r = rmsDe(buf, n, cnt); if (r > pico) pico = r }
+        val nativoOuPad = if (nativo > 0) nativo else 48000
+        val mono = AudioFormat.CHANNEL_IN_MONO; val estereo = AudioFormat.CHANNEL_IN_STEREO
+        // Combinações mais prováveis (src, config, nCanais, taxa), em ordem — as que já funcionaram.
+        val preferidas = listOf(
+            intArrayOf(6, mono, 1, nativoOuPad), intArrayOf(6, mono, 1, 48000), intArrayOf(6, mono, 1, 16000),
+            intArrayOf(6, estereo, 2, nativoOuPad), intArrayOf(1, mono, 1, 48000), intArrayOf(1, mono, 1, 16000),
+            intArrayOf(7, mono, 1, 48000)
+        )
+        // Duas rodadas com AQUECIMENTO do HAL: o mic do carro às vezes demora a entregar o 1º frame
+        // (cold start) ou está brevemente ocupado. Entre as rodadas, tira o mute de novo e espera.
+        repeat(2) { rodada ->
+            for (c in preferidas) {
+                val src = c[0]; val cfg = c[1]; val cnt = c[2]; val sr = c[3]
+                val minBuf = AudioRecord.getMinBufferSize(sr, cfg, AudioFormat.ENCODING_PCM_16BIT)
+                if (minBuf <= 0) continue
+                val ar = try {
+                    AudioRecord(src, sr, cfg, AudioFormat.ENCODING_PCM_16BIT, maxOf(minBuf * 4, sr * cnt))
+                } catch (_: Throwable) { continue }
+                if (ar.state != AudioRecord.STATE_INITIALIZED) { try { ar.release() } catch (_: Throwable) {}; continue }
+                var frames = 0; var pico = 0.0
+                try {
+                    ar.startRecording()
+                    val buf = ShortArray(minBuf)
+                    val t0 = System.currentTimeMillis()
+                    // espera até ~900ms pelo 1º frame (aquecimento), depois confirma alguns frames
+                    while (System.currentTimeMillis() - t0 < 900 && frames < 4) {
+                        val n = ar.read(buf, 0, buf.size)
+                        if (n > 0) { frames++; val r = rmsDe(buf, n, cnt); if (r > pico) pico = r } else Thread.sleep(20)
+                    }
+                } catch (_: Throwable) {}
+                if (frames >= 2) {
+                    CrashLog.stage(ctx, "mic: ATIVO ${MicPick(ar, sr, cnt, src).desc()} frames=$frames rodada=${rodada + 1}")
+                    return MicPick(ar, sr, cnt, src)
                 }
-            } catch (_: Throwable) {}
-            // Mic vivo = ENTREGA FRAMES (dados), mesmo em silencio. Nao exige som no momento da sondagem
-            // (o usuario fala depois). Antes da liberacao do appops, read nao retornava frame nenhum.
-            if (frames >= 2) {
-                CrashLog.stage(ctx, "mic: ATIVO ${MicPick(ar, sr, cnt, src).desc()} frames=$frames pico=${"%.4f".format(pico)}")
-                return MicPick(ar, sr, cnt, src)
+                try { ar.stop(); ar.release() } catch (_: Throwable) {}
             }
-            try { ar.stop(); ar.release() } catch (_: Throwable) {}
+            try { am?.isMicrophoneMute = false } catch (_: Throwable) {}
+            try { Thread.sleep(500) } catch (_: Throwable) {}
         }
-        CrashLog.stage(ctx, "mic: nenhuma combinacao entregou audio. silencio=${silencioInfo ?: "nenhum frame em nada"}")
+        CrashLog.stage(ctx, "mic: sem audio em 2 rodadas (appops=allow) -> mic ocupado/travado; reiniciar a multimidia")
         return null
     }
 
@@ -208,7 +216,7 @@ class VoiceEngine(
             }
             if (pick == null) {
                 rec.close()
-                onError("Mic nao captou. $permInfo")
+                onError("Mic travou (permissao/appops OK). Reinicie a multimidia e tente. $permInfo")
                 return@Thread
             }
             val audio = pick.rec
